@@ -4,6 +4,7 @@ var http = require("http");
 var bencoder = require("./bencoder.js");
 var SHA1 = require("./SHA1.js");
 var messageParse = require("./messageParse.js");
+var shuffle = require("./fyShuffle.js");
 var fs = require("fs");
 var net = require("net");
 var _ = require("underscore");
@@ -27,80 +28,78 @@ var randomString = function randomString(strLen){
 	return Math.random().toString(36).substring(2, strLen + 2);
 };
 
-var openDirectories = function openDirectories(filepath, existingPath){
+var seekPath = function seekPath(filepath, existingPath){
+	var output;
 	existingPath = existingPath || default_path;
-	if(typeof filepath === "string"){
-		return openDirectories(filepath.split(Path.sep), existingPath);
+	if(filepath && filepath.length > 0){
+		output = new Promise(function(resolve, reject){
+			fs.exists(Path.join(existingPath, filepath[0]), resolve);
+		})
+		.then(function(exists){
+			return exists ? seekPath(filepath.slice(1), Path.join(existingPath, filepath[0])) : Promise.resolve([filepath, existingPath]);
+		})
+		.catch(function(err){
+			console.log("seekPath error: " + err.stack);
+		});
 	}
 	else{
-		if(filepath.length > 1){
-			var curDirectory = filepath[0];
-			existingPath = Path.join(existingPath,curDirectory);
-			return new Promise(function(resolve, reject){
-				fs.exists(existingPath, function(exists){
-					resolve(exists);
-				});
-			})
-			.then(function(exists){
-				if(!exists){
-					return new Promise(function(resolve, reject){
-						fs.mkdir(existingPath, function(err){
-							if(err){
-								reject(err);
-							}
-							else{
-								resolve();
-							}
-						});
-					});
-				}
-				else{
-					return new Promise(function(resolve){resolve();});
-				}
-			})
-			.then(function(){
-				return openDirectories(filepath.slice(1), existingPath);
-			})
-			.catch(function(err){
-				console.log("OpenDirectories error:" + err);
-			});
-		}
-		else{
-			return new Promise(function(resolve, reject){
-				resolve(filepath);
-			});
-		}
+		output = Promise.resolve([filepath, existingPath]);
 	}
+	return output;
+};
+
+var createDirectories = function createDirectories(paths){
+	var output;
+	var filepath = paths[0];
+	var existingPath = paths[1];
+	existingPath = existingPath || default_path;
+	if(filepath && filepath.length > 0){
+		output = new Promise(function(resolve, reject){
+			fs.mkdir(Path.join(existingPath, filepath[0]), resolve);
+		})
+		.then(function(){
+			return createDirectories(filepath.slice(1), Path.join(existingPath, filepath[0]));
+		})
+		.catch(function(err){
+			console.log("createDirectories error: " + err.stack);
+		});
+	}
+	else{
+		output = Promise.resolve();
+	}
+	return output;
+}
+
+var openDirectories = function openDirectories(filepath){
+	var output;
+	if(filepath && filepath.length > 1){
+		output = seekPath(filepath.slice(0, filepath.length-1), default_path).then(createDirectories);
+	}
+	else{
+		output = Promise.resolve();
+	}
+	return output;
 };
 
 var prepFile = function prepFile(filepath, filesize){
 	var openFile;
 	var writeFile;
 	var fileError;
+	var path = Path.join.apply(this, filepath);
 	openFile = new Promise(function(resolve, reject){
-		fs.open(default_path + filepath, "w+", function(err, fd){
+		fs.open(default_path + path, "w+", function(err, fd){
 			if(err){
 				reject(err);
 			}
 			else{
-				console.log(filepath + " :: " + fd);
 				resolve(fd);
 			}
 		});
 	});
 	openFile.then(function(fd){
-		fs.stat(default_path + filepath, function(err, stats){
+		fs.ftruncate(fd, filesize, function(err){
 			if(err){
 				throw err;
-			}
-			else{
-				if(stats.size !== filesize){
-					fs.ftruncate(fd, filesize, function(err){
-						if(err){
-							throw err;
-						}
-					});
-				}
 			}
 		});
 	})
@@ -113,17 +112,8 @@ var prepFile = function prepFile(filepath, filesize){
 
 var main = function main(arg){
 	var torrentFile;
-	var uri;
-	var keys;
-	var trackerRes;
-	var params = {};
-	var peers = [];
-	var temp;
-	var tempPeer;
 	var downloads = [];
-	var path;
-
-	
+	var trackers = [];
 
 	var toReadTorrent = new Promise(function(resolve, reject){
 		fs.readFile(arg, "hex", function(err, data){
@@ -136,25 +126,36 @@ var main = function main(arg){
 		});
 	});
 
-	var toWriteFiles = toReadTorrent.then(function(data){
+	var initEnvironment = toReadTorrent.then(function(data){
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
+
+		if(torrentFile["announce-list"]){
+			for(var i = 0; i < torrentFile["announce-list"].length; i++){
+				trackers = trackers.concat(shuffle(torrentFile["announce-list"][i]));
+			}
+		}
+		else{
+			trackers.push(torrentFile["announce"]);
+		}
+
 		if(!torrentFile.info.files){
-			downloads.push([prepFile(torrentFile.info.name, torrentFile.info.length), torrentFile.info.length]);
+			downloads.push([prepFile([torrentFile.info.name], torrentFile.info.length), torrentFile.info.length]);
 		}
 		else{
 			for(var i = 0; i < torrentFile.info.files.length; i++){
-				var path = torrentFile.info.files[i].path.join("/");
-				downloads.push([openDirectories(path).then((function(j){
+				downloads.push([openDirectories(torrentFile.info.files[i].path).then((function(j){
 					return function(){
-						return prepFile(torrentFile.info.files[j].path.join("/"), torrentFile.info.files[j].length);
+						return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
 					}
 				})(i)),torrentFile.info.files[i].length]);
 			}
 		}
+	})
+	.catch(function(err){
+		console.log("Main function error: " + err.stack);
 	});
-	toWriteFiles.catch(function(err){
-		console.log(err);
-	});
+
+	
 };
 
 main(args[2]);
