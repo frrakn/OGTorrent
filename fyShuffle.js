@@ -1,20 +1,23 @@
 "use strict";
 
-var shuffle = function shuffle(arr){
+var shuffle = function shuffle(arr, num){
 	var n = arr.length;
 	var random;
 	var t;
-
-	for(var i = 0; i < arr.length; i++){
-		random = Math.floor(Math.random() * n);
-		t = arr[n - 1];
-		arr[n - 1] = arr[random];
-		arr[random] = t;
-		n -= 1;
+	num = num || arr.length;
+	for(var j = 0; j < arr.length; j+= num){
+		var interval = Math.min(num, arr.length - j);
+		n = interval;
+		for(var i = 0; i < interval; i++){
+			random = Math.floor(Math.random() * n);
+			t = arr[j + n - 1];
+			arr[j + n - 1] = arr[j + random];
+			arr[j + random] = t;
+			n -= 1;
+		}
 	}
-	
 	return arr;
 }
-
+	
 module.exports = {};
 module.exports = shuffle;
