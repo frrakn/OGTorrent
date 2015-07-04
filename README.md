@@ -2,4 +2,4 @@ DONT LOOK AT ME
 
 I'm not ready
 
-underscore and q dependencies
+underscore and bluebird dependencies

@@ -6,6 +6,7 @@ var SHA1 = require("./SHA1.js");
 var messageParse = require("./messageParse.js");
 var shuffle = require("./fyShuffle.js");
 var DEFAULT = require("./default.js");
+var Event = require("events");
 var fs = require("fs");
 var net = require("net");
 var _ = require("underscore");
@@ -20,6 +21,16 @@ function debug(msg){
 		console.log(msg);
 	}
 };
+
+function querify(obj){
+	var output = "";
+	var keys;
+	keys = Object.keys(obj);
+	for(var i = 0; i < keys.length; i++){
+		output += keys[i] + "=" + obj[keys[i]] + "&";
+	}
+	return output.slice(0, output.length - 1);
+}
 
 function parseHex(hexString){
 	var str = "";
@@ -44,7 +55,7 @@ function seekPath(filepath, existingPath){
 			return exists ? seekPath(filepath.slice(1), Path.join(existingPath, filepath[0])) : Promise.resolve([filepath, existingPath]);
 		})
 		.catch(function(err){
-			console.log("seekPath error: " + err.stack);
+			debug("SEEKPATH ERROR: " + err.stack);
 		});
 	}
 	else{
@@ -66,7 +77,7 @@ function createDirectories(paths){
 			return createDirectories(filepath.slice(1), Path.join(existingPath, filepath[0]));
 		})
 		.catch(function(err){
-			console.log("createDirectories error: " + err.stack);
+			debug("CREATEDIRECTORIES ERROR: " + err.stack);
 		});
 	}
 	else{
@@ -88,8 +99,6 @@ function openDirectories(filepath){
 
 function prepFile(filepath, filesize){
 	var openFile;
-	var writeFile;
-	var fileError;
 	var path = Path.join.apply(this, filepath);
 	openFile = new Promise(function(resolve, reject){
 		fs.open(DEFAULT.PATH + path, "w+", function(err, fd){
@@ -100,8 +109,8 @@ function prepFile(filepath, filesize){
 				resolve(fd);
 			}
 		});
-	});
-	openFile.then(function(fd){
+	})
+	.then(function(fd){
 		fs.ftruncate(fd, filesize, function(err){
 			if(err){
 				throw err;
@@ -109,7 +118,7 @@ function prepFile(filepath, filesize){
 		});
 	})
 	.catch(function(err){
-		console.log("PrepFile Error: " + err.stack);
+		debug("PREPFILE ERROR: " + err.stack);
 	});
 
 	return openFile;
@@ -121,6 +130,8 @@ function main(arg){
 	var trackers = [];
 	var peers = [];
 	var connpeers = [];
+	var events = new Event.EventEmitter();
+	var tracker;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -154,7 +165,7 @@ function main(arg){
 			for(var i = 0; i < torrentFile.info.files.length; i++){
 				downloads.push([openDirectories(torrentFile.info.files[i].path).then((function(j){
 					return function(){
-						return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
+					return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
 					}
 				})(i)),torrentFile.info.files[i].length]);
 			}
@@ -185,7 +196,6 @@ function main(arg){
 	function populatePeers(){
 		var params = {};
 		var output;
-		var tracker;
 
 		params.info_hash = SHA1(bencoder.bencode(torrentFile.info));
 		params.peerid = "-" + DEFAULT.torrentPrefix + DEFAULT.version + "-" + randomString(12);
@@ -196,6 +206,7 @@ function main(arg){
 		params.left = torrentFile.info.length;
 		params.downloaded = torrentFile.info.length - params.left;
 		params.uploaded = torrentFile.info.length - params.left;
+		
 		tracker = url.parse(trackers.shift());
 		output = Promise.resolve([params, tracker]);
 		if(tracker.protocol === "http:" || tracker.protocol === "https:"){
@@ -208,14 +219,50 @@ function main(arg){
 			debug("Tracker protocol \"" + tracker.protocol + "\" not recognized. Skipping to next tracker.");
 			output.then(populatePeers);
 		}
+		return output;
 	};
 
 	function httpTracker(args){
 		var params = args[0];
 		var tracker = args[1];
+		var uri;
+		var cont;
 		debug("Getting peers from HTTP Tracker: " + tracker.href);
 		params.info_hash = escape(parseHex(params.info_hash));
 		params.event = "started";
+		params.compact = 1;
+		uri = tracker.href + "?" + querify(params);
+		cont = setTimeout(checkPeers, 10000);
+		return new Promise(function(resolve, reject){
+			http.get(uri, function(res){
+				res.on("data", function(chunk){
+					clearTimeout(cont);
+					var peerIP;
+					var port;
+					var trackerRes = bencoder.bdecode(parseHex(chunk.toString("hex")))[0];
+					var newPeers = trackerRes.peers;
+					for(var i = 0; i < newPeers.length; i+=6){
+						peerIP = newPeers.charCodeAt(i) + "." + newPeers.charCodeAt(i + 1) + "." + newPeers.charCodeAt(i + 2) + "." + newPeers.charCodeAt(i + 3);
+						port = (newPeers.charCodeAt(i + 4) * 256) + newPeers.charCodeAt(i + 5);
+						peers.push({peerIP: peerIP, port: port, messageBuffer: null, availPieces: null, interested: false, choked: false});
+					}
+					events.on("completed", function(){
+						params.event = "completed";
+						uri = tracker.href + "?" + querify(params);
+						http.get(uri);
+					});
+					events.on("stopped", function(){
+						params.event = "stopped";
+						uri = tracker.href + "?" + querify(params);
+						http.get(uri);
+					});
+					resolve();
+				});
+			});
+		}).then(checkPeers, function(err){
+			debug("Error populating peers from HTTP Tracker: " + tracker + "\n\n" + err);
+			checkPeers;
+		});
 	};
 
 	function udpTracker(args){
@@ -226,6 +273,7 @@ function main(arg){
 	function connectPeer(){
 		//  TODO
 		console.log("Connecting to peers");
+		events.emit("stopped");
 	};
 };
 
