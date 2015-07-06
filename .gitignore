@@ -1,7 +1,4 @@
 downloads/
 .archive/
-flagfromserver.torrent
-got.torrent
-fedora.torrent
-ted.torrent
 output
+*.torrent

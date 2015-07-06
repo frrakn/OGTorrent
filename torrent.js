@@ -4,6 +4,7 @@ var http = require("http");
 var bencoder = require("./bencoder.js");
 var SHA1 = require("./SHA1.js");
 var messageParse = require("./messageParse.js");
+var messageParseUDP = require("./messageParseUDP.js");
 var shuffle = require("./fyShuffle.js");
 var DEFAULT = require("./default.js");
 var Event = require("events");
@@ -13,7 +14,8 @@ var _ = require("underscore");
 var Promise = require("bluebird");
 var Path = require("path");
 var url = require("url");
-var DEBUG = false;
+var dgram = require("dgram");
+var DEBUG = true;
 var args = process.argv;
 
 function debug(msg){
@@ -74,7 +76,7 @@ function createDirectories(paths){
 			fs.mkdir(Path.join(existingPath, filepath[0]), resolve);
 		})
 		.then(function(){
-			return createDirectories(filepath.slice(1), Path.join(existingPath, filepath[0]));
+			return createDirectories([filepath.slice(1), Path.join(existingPath, filepath[0])]);
 		})
 		.catch(function(err){
 			debug("CREATEDIRECTORIES ERROR: " + err.stack);
@@ -126,6 +128,7 @@ function prepFile(filepath, filesize){
 
 function main(arg){
 	var torrentFile;
+	var totalLength;
 	var downloads = [];
 	var trackers = [];
 	var peers = [];
@@ -165,7 +168,7 @@ function main(arg){
 			for(var i = 0; i < torrentFile.info.files.length; i++){
 				downloads.push([openDirectories(torrentFile.info.files[i].path).then((function(j){
 					return function(){
-					return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
+						return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
 					}
 				})(i)),torrentFile.info.files[i].length]);
 			}
@@ -181,14 +184,16 @@ function main(arg){
 	function checkPeers(){
 		var output = Promise.resolve();
 		if(peers.length < DEFAULT.MAX_PEERS && trackers.length > 0){
-			debug("Peers: " + peers.length + ", Trackers: " + trackers.length + " :: Adding additional peers...");
+			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length + " :: Adding additional peers...");
 			output.then(populatePeers);
 		}
 		else if(connpeers.length < DEFAULT.MAX_CONNPEERS && peers.length > 0){
-			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + " :: Connecting to new peers...");
+			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length + " :: Connecting to new peers...");
 			output.then(connectPeer);
 		}
 		else{
+			//  TODO If no more trackers and peers are not good enough, set a timeout to allow any outstanding tracker requests to come in, and then give up and exit program	
+			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length +  " :: No additional peers available / needed, no new peers available / needed");
 		}
 		return output;
 	};
@@ -201,12 +206,17 @@ function main(arg){
 		params.peerid = "-" + DEFAULT.torrentPrefix + DEFAULT.version + "-" + randomString(12);
 		params.port =	DEFAULT.PORT;
 		params.numwant = DEFAULT.MAX_PEERS;
+		params.event = "started";
 
 		//  TODO - Will have to edit this when the filecheck is implemented
-		params.left = torrentFile.info.length;
-		params.downloaded = torrentFile.info.length - params.left;
-		params.uploaded = torrentFile.info.length - params.left;
-		
+		totalLength = 0;
+		for(var i = 0; i < downloads.length; i++){
+			totalLength += downloads[i][1];
+		}
+		params.left = totalLength;
+		params.downloaded = totalLength - params.left;
+		params.uploaded = totalLength - params.left;
+	
 		tracker = url.parse(trackers.shift());
 		output = Promise.resolve([params, tracker]);
 		if(tracker.protocol === "http:" || tracker.protocol === "https:"){
@@ -229,7 +239,6 @@ function main(arg){
 		var cont;
 		debug("Getting peers from HTTP Tracker: " + tracker.href);
 		params.info_hash = escape(parseHex(params.info_hash));
-		params.event = "started";
 		params.compact = 1;
 		uri = tracker.href + "?" + querify(params);
 		cont = setTimeout(checkPeers, 10000);
@@ -260,14 +269,29 @@ function main(arg){
 				});
 			});
 		}).then(checkPeers, function(err){
-			debug("Error populating peers from HTTP Tracker: " + tracker + "\n\n" + err);
+			debug("Error populating peers from HTTP Tracker: " + tracker.href + "\n\n" + err);
 			checkPeers;
 		});
 	};
 
 	function udpTracker(args){
-		//  TODO
-		console.log("Getting peers from UDP tracker");
+		var params = args[0];
+		var tracker = args[1];
+		debug("Getting peers from UDP Tracker: " + tracker.href);
+		var sock = dgram.createSocket("udp4");
+		sock.bind(6881, function(){
+			sock.on("message", function(message){
+				console.log(message);
+				console.log(messageParseUDP.parse(message));
+			});
+			var msg = {}; 
+			msg.transaction_id = Math.floor(Math.random() * 0xffffffff);
+			msg.type = "connect";
+			sock.send(messageParseUDP.pkg(msg), 0, 16, tracker.port, tracker.hostname, function(){
+				console.log("Sent message to " + tracker.href);
+				console.log(messageParseUDP.pkg(msg));
+			});
+		});
 	};
 
 	function connectPeer(){
