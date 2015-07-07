@@ -128,13 +128,14 @@ function prepFile(filepath, filesize){
 
 function main(arg){
 	var torrentFile;
-	var totalLength;
 	var downloads = [];
 	var trackers = [];
+	var info_hash;
+	var peerid;
+	var totalLength;
 	var peers = [];
 	var connpeers = [];
 	var events = new Event.EventEmitter();
-	var tracker;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -152,6 +153,13 @@ function main(arg){
 		debug("*****     Parsing torrent file...     *****");
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
 		debug("*****     Populating available trackers...     *****");
+		info_hash = SHA1(bencoder.bencode(torrentFile.info));
+		peerid = "-" + DEFAULT.torrentPrefix + DEFAULT.version + "-" + randomString(12);
+		totalLength = 0;
+		for(var i = 0; i < downloads.length; i++){
+			totalLength += downloads[i][1];
+		}
+	
 		if(torrentFile["announce-list"]){
 			for(var i = 0; i < torrentFile["announce-list"].length; i++){
 				trackers = trackers.concat(shuffle(torrentFile["announce-list"][i]));
@@ -201,18 +209,15 @@ function main(arg){
 	function populatePeers(){
 		var params = {};
 		var output;
+		var tracker;
 
-		params.info_hash = SHA1(bencoder.bencode(torrentFile.info));
-		params.peerid = "-" + DEFAULT.torrentPrefix + DEFAULT.version + "-" + randomString(12);
+		params.info_hash = info_hash;
+		params.peerid = peerid;
 		params.port =	DEFAULT.PORT;
 		params.numwant = DEFAULT.MAX_PEERS;
 		params.event = "started";
 
 		//  TODO - Will have to edit this when the filecheck is implemented
-		totalLength = 0;
-		for(var i = 0; i < downloads.length; i++){
-			totalLength += downloads[i][1];
-		}
 		params.left = totalLength;
 		params.downloaded = totalLength - params.left;
 		params.uploaded = totalLength - params.left;
@@ -267,10 +272,13 @@ function main(arg){
 					});
 					resolve();
 				});
+			}).on("error", function(err){
+				reject(err);
 			});
-		}).then(checkPeers, function(err){
+		})
+		.then(checkPeers, function(err){
 			debug("Error populating peers from HTTP Tracker: " + tracker.href + "\n\n" + err);
-			checkPeers;
+			checkPeers();
 		});
 	};
 
@@ -278,21 +286,63 @@ function main(arg){
 		var params = args[0];
 		var tracker = args[1];
 		debug("Getting peers from UDP Tracker: " + tracker.href);
-		var sock = dgram.createSocket("udp4");
-		sock.bind(6881, function(){
-			sock.on("message", function(message){
-				console.log(message);
-				console.log(messageParseUDP.parse(message));
-			});
-			var msg = {}; 
-			msg.transaction_id = Math.floor(Math.random() * 0xffffffff);
-			msg.type = "connect";
-			sock.send(messageParseUDP.pkg(msg), 0, 16, tracker.port, tracker.hostname, function(){
-				console.log("Sent message to " + tracker.href);
-				console.log(messageParseUDP.pkg(msg));
-			});
-		});
+		return Promise.resolve([DEFAULT.PORT, params, tracker]).then(UDPGetSocket);
 	};
+
+	function UDPGetSocket(args){
+		var port = args[0];
+		var params = args[1];
+		var tracker = args[2];
+		var socket = dgram.createSocket("udp4");	
+		debug("Tracker " + tracker.href + " :: Binding socket to port " + port);
+		return new Promise(function(resolve, reject){
+			socket.bind(port, function(){
+				resolve([socket, params, tracker]);
+			});
+			socket.on("error", function(err){
+				reject(err);
+			});
+		})
+		.then(UDPConnect, function(){
+			debug("Tracker " + tracker.href + " :: Failed to bind socket to port " + port);
+			return UDPGetSocket([port + 1, params, tracker]);
+		});
+	}
+
+	function UDPConnect(args){
+		var socket = args[0];
+		var params = args[1];
+		var tracker = args[2];
+		var timeout = args[3];
+		var msg = {};
+		
+		msg.transaction_id = Math.random() * DEFAULT.POW2_32;
+		msg.type = "connect";
+
+		var timeout = UDPSendConnect(socket, msg, tracker, 0);
+		console.log(timeout);
+	};
+
+	function UDPSendConnect(socket, msg, tracker, num){
+		var output;
+		debug("Tracker " + tracker.href + " :: Sending \"connect\" message on port " + socket.address().port);	
+		socket.send(messageParseUDP.pkg(msg), 0, 16, tracker.port, tracker.hostname, function(err){
+			if(err){
+				debug("Tracker " + tracker.href + " :: Error sending \"connect\" message");
+			}
+			else
+				debug("Tracker " + tracker.href + " :: Sent \"connect\" message :: Attempt #" + num);
+		});
+		num++;
+		if(num >= 8){
+		}
+		else{
+			output = setTimeout(function(){
+				UDPSendConnect(socket, msg, tracker, num);
+			}, 15 * Math.pow(2, num) * 1000);
+		}
+		return output;
+	}
 
 	function connectPeer(){
 		//  TODO
