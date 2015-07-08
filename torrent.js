@@ -184,9 +184,10 @@ function main(arg){
 		debug("*****     Exiting init stage, beginning main stage...     *****");
 	});
 
-	var stageMain = stageInit.then(checkPeers)
+	var stageMain = stageInit
+	.then(checkPeers)
 	.catch(function(err){
-		console.log("Main function error: " + err.stack);
+		debug("Main function error: " + err.stack);
 	});
 
 	function checkPeers(){
@@ -286,7 +287,8 @@ function main(arg){
 		var params = args[0];
 		var tracker = args[1];
 		debug("Getting peers from UDP Tracker: " + tracker.href);
-		return Promise.resolve([DEFAULT.PORT, params, tracker]).then(UDPGetSocket);
+		return Promise.resolve([DEFAULT.PORT, params, tracker])
+		.then(UDPGetSocket);
 	};
 
 	function UDPGetSocket(args){
@@ -313,36 +315,175 @@ function main(arg){
 		var socket = args[0];
 		var params = args[1];
 		var tracker = args[2];
-		var timeout = args[3];
 		var msg = {};
-		
-		msg.transaction_id = Math.random() * DEFAULT.POW2_32;
-		msg.type = "connect";
+		var timeout = []; //  Using array to keep a pointer to a pointer... kinda hacked? yes
+		var listen;
+		var send;
 
-		var timeout = UDPSendConnect(socket, msg, tracker, 0);
-		console.log(timeout);
+		msg.transaction_id = Math.random() * DEFAULT.POW2_32;
+		params.transaction_id = msg.transaction_id;
+		msg.type = "connect";
+		
+		timeout[0] = setTimeout(function(){}, 0);
+		listen = UDPListenConnect(socket, tracker, params)
+		.cancellable()
+		.catch(function(err){
+		});
+		send = UDPSendConnect(socket, msg, tracker, 0, timeout)
+		.cancellable()
+		.catch(function(err){
+		});
+		return Promise.any([listen, send])
+		.then(function(result){
+			var output;
+			if(result){
+				debug("Tracker " + tracker.href + " :: Received \"connect\" response :: connection_id " + result);
+				clearTimeout(timeout[0]);
+				send.cancel();
+				params.connection_id = result;
+				return UDPAnnounce([socket, params, tracker]);
+			}
+			else{
+				debug("Tracker " + tracker.href + " :: Timed out");
+				socket.close();
+				listen.cancel();
+				return checkPeers();
+			}
+		});
 	};
 
-	function UDPSendConnect(socket, msg, tracker, num){
+	function UDPSendConnect(socket, msg, tracker, num, timeout){
 		var output;
-		debug("Tracker " + tracker.href + " :: Sending \"connect\" message on port " + socket.address().port);	
-		socket.send(messageParseUDP.pkg(msg), 0, 16, tracker.port, tracker.hostname, function(err){
-			if(err){
-				debug("Tracker " + tracker.href + " :: Error sending \"connect\" message");
-			}
-			else
-				debug("Tracker " + tracker.href + " :: Sent \"connect\" message :: Attempt #" + num);
-		});
-		num++;
-		if(num >= 8){
+		if(num > DEFAULT.TRIES){
+			output = Promise.resolve();
 		}
 		else{
-			output = setTimeout(function(){
-				UDPSendConnect(socket, msg, tracker, num);
-			}, 15 * Math.pow(2, num) * 1000);
+			output = new Promise(function(resolve, reject){
+				debug("Tracker " + tracker.href + " :: Sending \"connect\" message on port " + socket.address().port + " :: transaction_id: " + msg.transaction_id);	
+				socket.send(messageParseUDP.pkg(msg), 0, 16, tracker.port, tracker.hostname, function(err){
+					if(err){
+						debug("Tracker " + tracker.href + " :: Error sending \"connect\" message" + err);
+					}
+					else{
+						debug("Tracker " + tracker.href + " :: Sent \"connect\" message :: Attempt #" + (num + 1));
+					}
+					num++;
+					timeout[0] = setTimeout(resolve, 15 * Math.pow(2, num) * DEFAULT.SPEED);
+				});
+			})
+			.then(function(){
+				return UDPSendConnect(socket, msg, tracker, num, timeout);
+			});
 		}
 		return output;
-	}
+	};
+
+	function UDPListenConnect(socket, tracker, params){
+		return new Promise(function(resolve, reject){
+			socket.on("message", function(message){
+				var msg = messageParseUDP.parse(message);
+				if(params.transaction_id === msg.transaction_id){
+					resolve(msg.connection_id);
+				}
+			});
+		});
+	};
+
+	function UDPAnnounce(args){
+		var socket = args[0];
+		var params = args[1];
+		var tracker = args[2];
+		var msg = {};
+		var timeout = []; //  Using array to keep a pointer to a pointer... kinda hacked? yes
+		var listen;
+		var send;
+
+		msg.connection_id = params.connection_id;
+		msg.transaction_id = Math.random() * DEFAULT.POW2_32;
+		params.transaction_id = msg.transaction_id;
+		msg.type = "announce";
+		msg.info_hash = params.info_hash;
+		msg.peerid = params.peerid;
+		msg.downloaded = params.downloaded;
+		msg.left = params.left;
+		msg.uploaded = params.uploaded;
+		msg.event = "started";
+		msg.ip = 0;
+		msg.key = Math.random() * DEFAULT.POW2_32;
+		msg.num_want = params.numwant;
+		msg.port = DEFAULT.PORT;
+
+		timeout[0] = setTimeout(function(){}, 0);
+		listen = UDPListenAnnounce(socket, tracker, params)
+		.cancellable()
+		.catch(function(err){
+		});
+		send = UDPSendAnnounce(socket, msg, tracker, 0, timeout)
+		.cancellable()
+		.catch(function(err){
+		});
+		return Promise.any([listen, send])
+		.then(function(result){
+			var output;
+			if(result){
+				debug("Tracker " + tracker.href + " :: Received \"announce\" response");
+				clearTimeout(timeout[0]);
+				socket.close();
+				send.cancel();
+				for(var i = 0; i < result.peers.length; i++){
+					peers.push({peerIP: result.peers[i].peerIP, port: result.peers[i].port, messageBuffer: null, availPieces: null, interested: false, choked: false});
+				}	
+				return checkPeers();
+			}
+			else{
+				debug("Tracker " + tracker.href + " :: Timed out");
+				socket.close();
+				listen.cancel();
+				return checkPeers();
+			}
+		});
+	};
+
+
+	function UDPSendAnnounce(socket, msg, tracker, num, timeout){
+		var output;
+		if(num > DEFAULT.TRIES){
+			output = Promise.resolve();
+		}
+		else{
+			output = new Promise(function(resolve, reject){
+				debug("Tracker " + tracker.href + " :: Sending \"announce\" message on port " + socket.address().port + " :: transaction_id: " + msg.transaction_id);	
+				socket.send(messageParseUDP.pkg(msg), 0, 98, tracker.port, tracker.hostname, function(err){
+					if(err){
+						debug("Tracker " + tracker.href + " :: Error sending \"announce\" message" + err);
+					}
+					else{
+						debug("Tracker " + tracker.href + " :: Sent \"announce\" message :: Attempt #" + (num + 1));
+					}
+					num++;
+					timeout[0] = setTimeout(resolve, 15 * Math.pow(2, num) * DEFAULT.SPEED);
+				});
+			})
+			.then(function(){
+				return UDPSendAnnounce(socket, msg, tracker, num, timeout);
+			});
+		}
+		return output;
+	};
+
+	function UDPListenAnnounce(socket, tracker, params){
+		return new Promise(function(resolve, reject){
+			socket.on("message", function(message){
+				var msg = messageParseUDP.parse(message);
+				if(msg.error){
+					debug(msg.error);
+				}
+				else if(params.transaction_id === msg.transaction_id){
+					resolve(msg);
+				}
+			});
+		});
+	};
 
 	function connectPeer(){
 		//  TODO

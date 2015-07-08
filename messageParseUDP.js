@@ -10,6 +10,7 @@
  */
 
 var DEFAULT = require("./default.js");
+var fs = require("fs");
 
 var parse = function parse(buffer){
 	var action;
@@ -22,6 +23,9 @@ var parse = function parse(buffer){
 	lengthError = "Packet length too short, likely missing data";
 	if(buffer.length >= 4){
 		action = buffer.readUInt32BE(index);
+		if(action > 3){
+			action = buffer.readUInt32LE(index);
+		}
 		index += 4;
 		output.action = action;
 
@@ -33,7 +37,7 @@ var parse = function parse(buffer){
 					output.connection_id = buffer.readDoubleBE(index);
 				}
 				else{
-					throw lengthError;
+					output.error = lengthError;
 				}
 				break;
 			case 1:
@@ -52,33 +56,34 @@ var parse = function parse(buffer){
 					while(buffer.length - index >= 6){
 						peerIP = buffer.readUInt8(index) + "." + buffer.readUInt8(index + 1) + "." + buffer.readUInt8(index + 2) + "." + buffer.readUInt8(index + 3);
 						port = buffer.readUInt16BE(index + 4);
+						output.peers.push({peerIP: peerIP, port:port});
 						index += 6;
 					}
 				}
 				else{
-					throw lengthError;
+					output.error = lengthError;
 				}
 				break;
 			case 2:
-				throw "Scrape requests not supported";
+				output.error = "Scrape requests not supported";
 				//  TODO - low priority
 				break;
 			case 3:
 				if(buffer.length >= 8){
 					output.transaction_id = buffer.readUInt32BE(index);
 					index += 4;
-					throw buffer.toString("utf8", 8, buf.length);
+					output.error = buffer.toString("utf8", 8, buffer.length);
 				}
 				else{
-					throw lengthError;
+					output.error = lengthError;
 				}
 				break;
 			default:
-				throw "Action value " + action + " not supported or recognized";
+				output.error = "Action value " + action + " not supported or recognized";
 		}
 	}
 	else{
-		throw lengthError;
+		output.error = lengthError;
 	}
 	return output;
 };
@@ -132,7 +137,7 @@ var pkg = function pkg(msg){
 			output.writeUInt16BE(msg.port || DEFAULT.DEFAULT_PORT, index);
 			break;
 		case "default":
-			throw "Message type unsupported";
+			output.error = "Message type unsupported";
 	}
 	return output;
 };
