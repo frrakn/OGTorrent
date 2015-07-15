@@ -250,6 +250,16 @@ function main(arg){
 		cont = setTimeout(checkPeers, 10000);
 		return new Promise(function(resolve, reject){
 			http.get(uri, function(res){
+				events.on("completed", function(){
+					params.event = "completed";
+					uri = tracker.href + "?" + querify(params);
+					http.get(uri);
+				});
+				events.on("stopped", function(){
+					params.event = "stopped";
+					uri = tracker.href + "?" + querify(params);
+					http.get(uri);
+				});
 				res.on("data", function(chunk){
 					clearTimeout(cont);
 					var peerIP;
@@ -261,16 +271,6 @@ function main(arg){
 						port = (newPeers.charCodeAt(i + 4) * 256) + newPeers.charCodeAt(i + 5);
 						peers.push({peerIP: peerIP, port: port, messageBuffer: null, availPieces: null, interested: false, choked: false});
 					}
-					events.on("completed", function(){
-						params.event = "completed";
-						uri = tracker.href + "?" + querify(params);
-						http.get(uri);
-					});
-					events.on("stopped", function(){
-						params.event = "stopped";
-						uri = tracker.href + "?" + querify(params);
-						http.get(uri);
-					});
 					resolve();
 				});
 			}).on("error", function(err){
@@ -459,6 +459,14 @@ function main(arg){
 					}
 					else{
 						debug("Tracker " + tracker.href + " :: Sent \"announce\" message :: Attempt #" + (num + 1));
+						events.on("completed", function(){
+							msg.event = "completed";
+							socket.send(messageParseUDP.pkg(msg), 0, 98, tracker.port, tracker.hostname);
+						}
+						events.on("stopped", function(){
+							msg.event = "stopped";
+							socket.send(messageParseUDP.pkg(msg), 0, 98, tracker.port, tracker.hostname);
+						}
 					}
 					num++;
 					timeout[0] = setTimeout(resolve, 15 * Math.pow(2, num) * DEFAULT.SPEED);
