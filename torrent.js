@@ -270,7 +270,7 @@ function main(arg){
 					for(var i = 0; i < newPeers.length; i+=6){
 						peerIP = newPeers.charCodeAt(i) + "." + newPeers.charCodeAt(i + 1) + "." + newPeers.charCodeAt(i + 2) + "." + newPeers.charCodeAt(i + 3);
 						port = (newPeers.charCodeAt(i + 4) * 256) + newPeers.charCodeAt(i + 5);
-						peers.push(new Peer(peerIP, port, torrentFile.info.pieces.length / 20));
+						peers.push(new Peer(peerIP, port, torrentFile.info.pieces.length / 20, unescape(params.info_hash)));
 						console.log(peers[0]);
 					}
 					resolve();
@@ -433,7 +433,7 @@ function main(arg){
 				socket.close();
 				send.cancel();
 				for(var i = 0; i < result.peers.length; i++){
-					peers.push(new Peer(result.peers[i].peerIP, result.peers[i].port, torrentFile.info.pieces.length / 20));
+					peers.push(new Peer(result.peers[i].peerIP, result.peers[i].port, torrentFile.info.pieces.length / 20, params.info_hash));
 				}	
 				return checkPeers();
 			}
@@ -504,15 +504,15 @@ function main(arg){
 			peer.socket.connect(peer.port, peer.peerIP, function(){
 				resolve(peer);
 			});
-			peer.socket.setTimeout(1000);
+			peer.socket.setTimeout(5000);
 			peer.socket.on("timeout", function(){
 				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Timed out");
 				peer.socket.destroy();
 				connpeers.splice(connpeers.indexOf(peer), 1);
 				reject(peer);
 			});
-			peer.socket.on("error", function(){
-				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Error connecting");
+			peer.socket.on("error", function(err){
+				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Error connecting :: " + err);
 				peer.socket.destroy();
 				connpeers.splice(connpeers.indexOf(peer), 1);
 				reject(peer);
@@ -527,7 +527,12 @@ function main(arg){
 
 	function sendHandshake(peer){
 		var output;
-		
+		var toSend = "\u0013" + "BitTorrent protocol" + "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000" + peer.info_hash + peerid;
+		var handshakeBuf = new Buffer(toSend.length);
+		for(var i = 0; i < toSend.length; i++){
+			handshakeBuf.writeUInt8(toSend.charCodeAt(i), i);
+		}
+		peer.socket.write(handshakeBuf);
 	}
 };
 

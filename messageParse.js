@@ -23,10 +23,13 @@ var parse = function parse(buffer){
 		return [buffer, null];
 	}
 	len = buffer.slice(0, 4).readUInt32BE();
-	
+
 	//  Check for keep-alive message
 	if(len === 0){
 		output = {type: types["keep-alive"]};
+	}
+	else if(len === 323119476 && buffer.slice(1, 20).toString() === "BitTorrent protocol"){
+		output = {type: -1, info_hash: buffer.slice(28, 48)};
 	}
 	else{
 		id = buffer.readUInt8(4);

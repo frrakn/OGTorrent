@@ -2,8 +2,10 @@
 
 var Event = require("events");
 var net = require("net");
+var messageParse = require("./messageParse.js");
 
-function Peer(peerIP, port, fileLength){
+function Peer(peerIP, port, fileLength, info_hash){
+	var self = this;
 	this.socket = new net.Socket();
 	this.peerIP = peerIP;
 	this.port = port;
@@ -15,17 +17,19 @@ function Peer(peerIP, port, fileLength){
 	this.peerInterested = false;
 	this.requests = [];
 	this.requested = [];
+	this.info_hash = info_hash;
 
 	this.socket.on("data", function(data){
-		this.messageBuffer = Buffer.concat([this.messageBuffer, data]);
+		console.log(data);
+		self.messageBuffer = Buffer.concat([self.messageBuffer, data]);
 		var temp;
 		var message;
 		do{
-			temp = messageParse.parse(this.messageBuffer);
-			message = parse[1];
-			this.messageBuffer = parse[0];
+			temp = messageParse.parse(self.messageBuffer);
+			message = temp[1];
+			self.messageBuffer = temp[0];
 			if(message != null){
-				this.emit("message", message);
+				self.emit("message", message);
 			}
 		}
 		while(message != null);
