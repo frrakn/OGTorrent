@@ -7,6 +7,7 @@ var messageParse = require("./messageParse.js");
 var messageParseUDP = require("./messageParseUDP.js");
 var shuffle = require("./fyShuffle.js");
 var DEFAULT = require("./default.js");
+var Peer = require("./peer.js");
 var Event = require("events");
 var fs = require("fs");
 var net = require("net");
@@ -269,7 +270,8 @@ function main(arg){
 					for(var i = 0; i < newPeers.length; i+=6){
 						peerIP = newPeers.charCodeAt(i) + "." + newPeers.charCodeAt(i + 1) + "." + newPeers.charCodeAt(i + 2) + "." + newPeers.charCodeAt(i + 3);
 						port = (newPeers.charCodeAt(i + 4) * 256) + newPeers.charCodeAt(i + 5);
-						peers.push({peerIP: peerIP, port: port, messageBuffer: null, availPieces: null, interested: false, choked: false});
+						peers.push(new Peer(peerIP, port, torrentFile.info.pieces.length / 20));
+						console.log(peers[0]);
 					}
 					resolve();
 				});
@@ -431,7 +433,7 @@ function main(arg){
 				socket.close();
 				send.cancel();
 				for(var i = 0; i < result.peers.length; i++){
-					peers.push({peerIP: result.peers[i].peerIP, port: result.peers[i].port, messageBuffer: null, availPieces: null, interested: false, choked: false});
+					peers.push(new Peer(result.peers[i].peerIP, result.peers[i].port, torrentFile.info.pieces.length / 20));
 				}	
 				return checkPeers();
 			}
@@ -462,11 +464,11 @@ function main(arg){
 						events.on("completed", function(){
 							msg.event = "completed";
 							socket.send(messageParseUDP.pkg(msg), 0, 98, tracker.port, tracker.hostname);
-						}
+						});
 						events.on("stopped", function(){
 							msg.event = "stopped";
 							socket.send(messageParseUDP.pkg(msg), 0, 98, tracker.port, tracker.hostname);
-						}
+						});
 					}
 					num++;
 					timeout[0] = setTimeout(resolve, 15 * Math.pow(2, num) * DEFAULT.SPEED);
@@ -494,10 +496,39 @@ function main(arg){
 	};
 
 	function connectPeer(){
-		//  TODO
-		console.log("Connecting to peers");
-		events.emit("stopped");
+		var output;
+		var peer = peers.pop();
+		connpeers.push(peer);
+		debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Connecting...");
+		output = new Promise(function(resolve, reject){
+			peer.socket.connect(peer.port, peer.peerIP, function(){
+				resolve(peer);
+			});
+			peer.socket.setTimeout(1000);
+			peer.socket.on("timeout", function(){
+				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Timed out");
+				peer.socket.destroy();
+				connpeers.splice(connpeers.indexOf(peer), 1);
+				reject(peer);
+			});
+			peer.socket.on("error", function(){
+				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Error connecting");
+				peer.socket.destroy();
+				connpeers.splice(connpeers.indexOf(peer), 1);
+				reject(peer);
+			});
+		})
+		output.then(function(currentPeer){
+			checkPeers();
+			sendHandshake(currentPeer);
+		}, checkPeers);
+		return output;
 	};
+
+	function sendHandshake(peer){
+		var output;
+		
+	}
 };
 
 main(args[2]);
