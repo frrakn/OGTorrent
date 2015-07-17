@@ -207,9 +207,6 @@ function main(arg){
 		else{
 			//  TODO If no more trackers and peers are not good enough, set a timeout to allow any outstanding tracker requests to come in, and then give up and exit program	
 			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length +  " :: No additional peers available / needed, no new peers available / needed");
-			for(var i = 0; i < connpeers.length; i++){
-				console.log(connpeers[i]);
-			};
 		}
 		return output;
 	};
@@ -542,7 +539,6 @@ function main(arg){
 
 	function sendHandshake(peer){
 		var output;
-		console.log(peer.info_hash);
 		var toSend = DEFAULT.HANDSHAKE + peer.info_hash + peerid;
 		var handshakeBuf = new Buffer(toSend.length);
 		for(var i = 0; i < toSend.length; i++){

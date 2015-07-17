@@ -20,7 +20,6 @@ function Peer(peerIP, port, fileLength, info_hash){
 	this.info_hash = info_hash;
 
 	this.socket.on("data", function(data){
-		console.log(data);
 		self.messageBuffer = Buffer.concat([self.messageBuffer, data]);
 		var temp;
 		var message;
