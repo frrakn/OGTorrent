@@ -1,6 +1,5 @@
 "use strict";
 
-var http = require("http");
 var bencoder = require("./bencoder.js");
 var SHA1 = require("./SHA1.js");
 var messageParse = require("./messageParse.js");
@@ -8,7 +7,9 @@ var messageParseUDP = require("./messageParseUDP.js");
 var shuffle = require("./fyShuffle.js");
 var DEFAULT = require("./default.js");
 var Peer = require("./peer.js");
+var debug = require("./debug.js");
 var Event = require("events");
+var http = require("http");
 var fs = require("fs");
 var net = require("net");
 var _ = require("underscore");
@@ -16,14 +17,8 @@ var Promise = require("bluebird");
 var Path = require("path");
 var url = require("url");
 var dgram = require("dgram");
-var DEBUG = true;
 var args = process.argv;
 
-function debug(msg){
-	if(DEBUG){
-		console.log(msg);
-	}
-};
 
 function querify(obj){
 	var output = "";
@@ -129,14 +124,16 @@ function prepFile(filepath, filesize){
 
 function main(arg){
 	var torrentFile;
+	var torrentState = "standard";
 	var downloads = [];
 	var server;
 	var trackers = [];
 	var info_hash;
 	var peerid;
-	var totalLength;
+	var totalBytes;
 	var peers = [];
 	var connpeers = [];
+	var rarity = [];
 	var events = new Event.EventEmitter();
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
@@ -154,14 +151,12 @@ function main(arg){
 	var stageInit = stageReadTorrent.then(function(data){
 		debug("*****     Parsing torrent file...     *****");
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
+		for(var i = 0; i < torrentFile.info.pieces.length / 20; i++){
+			rarity[i] = 0;
+		}
 		debug("*****     Populating available trackers...     *****");
 		info_hash = SHA1(bencoder.bencode(torrentFile.info));
 		peerid = "-" + DEFAULT.torrentPrefix + DEFAULT.version + "-" + randomString(12);
-		totalLength = 0;
-		for(var i = 0; i < downloads.length; i++){
-			totalLength += downloads[i][1];
-		}
-	
 		if(torrentFile["announce-list"]){
 			for(var i = 0; i < torrentFile["announce-list"].length; i++){
 				trackers = trackers.concat(shuffle(torrentFile["announce-list"][i]));
@@ -182,6 +177,10 @@ function main(arg){
 					}
 				})(i)),torrentFile.info.files[i].length]);
 			}
+		}
+		totalBytes = 0;
+		for(var i = 0; i < downloads.length; i++){
+			totalBytes += downloads[i][1];
 		}
 		server = net.createServer();
 		server.listen(6881);
@@ -223,9 +222,9 @@ function main(arg){
 		params.event = "started";
 
 		//  TODO - Will have to edit this when the filecheck is implemented
-		params.left = totalLength;
-		params.downloaded = totalLength - params.left;
-		params.uploaded = totalLength - params.left;
+		params.left = totalBytes;
+		params.downloaded = totalBytes - params.left;
+		params.uploaded = totalBytes - params.left;
 	
 		tracker = url.parse(trackers.shift());
 		output = Promise.resolve([params, tracker]);
@@ -266,14 +265,14 @@ function main(arg){
 				});
 				res.on("data", function(chunk){
 					clearTimeout(cont);
-					var peerIP;
+					var ip;
 					var port;
 					var trackerRes = bencoder.bdecode(parseHex(chunk.toString("hex")))[0];
 					var newPeers = trackerRes.peers;
 					for(var i = 0; i < newPeers.length; i+=6){
-						peerIP = newPeers.charCodeAt(i) + "." + newPeers.charCodeAt(i + 1) + "." + newPeers.charCodeAt(i + 2) + "." + newPeers.charCodeAt(i + 3);
+						ip = newPeers.charCodeAt(i) + "." + newPeers.charCodeAt(i + 1) + "." + newPeers.charCodeAt(i + 2) + "." + newPeers.charCodeAt(i + 3);
 						port = (newPeers.charCodeAt(i + 4) * 256) + newPeers.charCodeAt(i + 5);
-						peers.push(new Peer(peerIP, port, torrentFile.info.pieces.length / 20, unescape(params.info_hash)));
+						peers.push(new Peer(ip, port, torrentFile.info.pieces.length / 20, unescape(params.info_hash)));
 					}
 					resolve();
 				});
@@ -435,7 +434,7 @@ function main(arg){
 				socket.close();
 				send.cancel();
 				for(var i = 0; i < result.peers.length; i++){
-					peers.push(new Peer(result.peers[i].peerIP, result.peers[i].port, torrentFile.info.pieces.length / 20, parseHex(params.info_hash)));
+					peers.push(new Peer(result.peers[i].ip, result.peers[i].port, torrentFile.info.pieces.length / 20, parseHex(params.info_hash)));
 				}	
 				return checkPeers();
 			}
@@ -501,40 +500,39 @@ function main(arg){
 		var output;
 		var peer = peers.pop();
 		connpeers.push(peer);
-		debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Connecting...");
 		output = new Promise(function(resolve, reject){
-			peer.socket.connect(peer.port, peer.peerIP, function(){
+			peer.init();
+			peer.on("init", function(){
 				resolve(peer);
 			});
-			peer.socket.setTimeout(DEFAULT.PEER_TIMEOUT);
+			peer.on("timeout", reject);
+			peer.on("close", reject);
+			peer.on("error", reject);
 			peer.on("timeout", function(){
-				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Timed out");
-				connpeers.splice(connpeers.indexOf(peer), 1);
-				peer.socket.end();
+				debug("Peer: " + peer.ip + ":" + peer.port + " :: Timed out");
+				closePeer(peer);
 			});
-			peer.socket.on("timeout", function(){
-				peer.emit("timeout");
-			});
-			peer.socket.on("timeout", reject);
 			peer.on("error", function(err){
-				debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Error :: " + err);
-				connpeers.splice(connpeers.indexOf(peer), 1);
-				peer.socket.end();
+				debug("Peer: " + peer.ip + ":" + peer.port + " :: Error :: " + err);
+				closePeer(peer);
 			});
-			peer.socket.on("error", function(err){
-				peer.emit("error", err);
+			peer.on("close", function(){
+				closePeer(peer);
 			});
-			peer.socket.on("error", reject)
-			peer.socket.on("close", function(){
-				peer.emit("error", "Socket closed");
+			peer.on("pieceTimeout", function(){
+				closePeer(peer);
 			});
-			peer.socket.on("close", reject);
 		})
-		output.then(function(currentPeer){
+		.then(function(currentPeer){
 			checkPeers();
 			sendHandshake(currentPeer);
 		}, checkPeers);
 		return output;
+	};
+
+	function closePeer(peer){
+		connpeers.splice(connpeers.indexOf(peer), 1);
+		peer.socket.end();
 	};
 
 	function sendHandshake(peer){
@@ -545,8 +543,9 @@ function main(arg){
 			handshakeBuf.writeUInt8(toSend.charCodeAt(i), i);
 		}
 		output = new Promise(function(resolve, reject){
-			peer.socket.on("timeout", reject);
-			peer.socket.on("error", reject);
+			peer.on("timeout", reject);
+			peer.on("close", reject);
+			peer.on("error", reject);
 			peer.socket.write(handshakeBuf, function(){
 				resolve(peer);
 			});
@@ -560,17 +559,91 @@ function main(arg){
 		output = new Promise(function (resolve, reject){
 			peer.once("message", function(msg){
 				if(msg.type === -1 && msg.info_hash.toString("binary") === peer.info_hash){
-					debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Handshake received");
-					resolve();
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake received");
+					resolve(peer);
 				}
 				else{
-					debug("Peer: " + peer.peerIP + ":" + peer.port + " :: Handshake failed :: info_hash " + msg.info_hash.toString("binary") + " :: " + peer.info_hash.toString());
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake failed :: info_hash " + msg.info_hash.toString("binary") + " :: " + peer.info_hash.toString());
 					peer.emit("error");
 					reject();
 				}
 			});
-		});
+		})
+		.then(attachListeners);
 		return output;
+	};
+
+	function attachListeners(peer){
+		var output = Promise.resolve(peer);
+		debug("Peer: " + peer.ip + ":" + peer.port + " :: Attaching message handlers...");
+		peer.on("message", function(msg){
+			switch(msg.type){
+				case messageParse.types["choke"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - CHOKE");
+					peer.choke = true;
+					updateRequests(peer);
+					break;
+				case messageParse.types["unchoke"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - UNCHOKE");
+					peer.choke = false;
+					updateRequests(peer);
+					break;
+				case messageParse.types["interested"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - INTERESTED");
+					peer.peerInterest = true;
+					break;
+				case messageParse.types["not interested"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - NOT INTERESTED");
+					peer.peerInterest = false;
+					break;
+				case messageParse.types["have"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - HAVE");
+					console.log(msg);
+					var prev = peer.availPieces.readUInt8(Math.floor(msg.index / 8));
+					peer.availPieces.writeUInt8((1 << (7 - (msg.index % 8))) | prev, Math.floor(msg.index / 8));
+					rarity[msg.index]++;
+					updateRequests(peer);
+					console.log(rarity);
+					break;
+				case messageParse.types["bitfield"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - BITFIELD");
+					//  Actual code is in the bitfield listener, debug statement stays here to show
+					//	if any bitfield message come in, even if later
+					break;
+				case messageParse.types["request"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - REQUEST");
+					break;
+				case messageParse.types["piece"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - PIECE");
+					break;
+				case messageParse.types["cancel"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - CANCEL");
+					break;
+				case messageParse.types["port"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - PORT");
+					break;
+				case messageParse.types["keep-alive"]:
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - KEEP-ALIVE");
+					break;
+				default:	
+					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - UNKNOWN");
+			}
+		});
+	};
+
+	function updateRequests(peer){
+		debug("Peer: " + peer.ip + ":" + peer.port + " :: Updating Requests...");
+		console.log(peer.availPieces);
+		if(!peer.choked){
+			
+		}
+		else{
+			if(peer.interested){
+			}
+			else{
+				
+			}
+		}
 	}
 };
 
