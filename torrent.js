@@ -1,5 +1,7 @@
 "use strict";
 
+//  TODO: UPLOADING
+
 var bencoder = require("./bencoder.js");
 var SHA1 = require("./SHA1.js");
 var messageParse = require("./messageParse.js");
@@ -135,6 +137,8 @@ function main(arg){
 	var connpeers = [];
 	var rarity = [];
 	var events = new Event.EventEmitter();
+	var chunkPossession;
+	var piecePossession;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -182,6 +186,8 @@ function main(arg){
 		for(var i = 0; i < downloads.length; i++){
 			totalBytes += downloads[i][1];
 		}
+		piecePossession = new Buffer(torrentFile.info.pieces.length / 20);
+		chunkPossession = new Buffer(Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES));
 		server = net.createServer();
 		server.listen(6881);
 		debug("*****     Exiting init stage, beginning main stage...     *****");
@@ -526,13 +532,16 @@ function main(arg){
 		.then(function(currentPeer){
 			checkPeers();
 			sendHandshake(currentPeer);
-		}, checkPeers);
+		}, checkPeers);   //  NOTE: might want to delete? replicated checkPeers on failure, since listeners will reject
+											//  and rejection will checkPeers and actual close socket function will also checkPeers 
+											//  TODO: tidy up checkPeers calls
 		return output;
 	};
 
 	function closePeer(peer){
 		connpeers.splice(connpeers.indexOf(peer), 1);
 		peer.socket.end();
+		checkPeers();
 	};
 
 	function sendHandshake(peer){
@@ -555,22 +564,16 @@ function main(arg){
 	}
 
 	function listenHandshake(peer){
-		var output;
-		output = new Promise(function (resolve, reject){
-			peer.once("message", function(msg){
-				if(msg.type === -1 && msg.info_hash.toString("binary") === peer.info_hash){
-					debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake received");
-					resolve(peer);
-				}
-				else{
-					debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake failed :: info_hash " + msg.info_hash.toString("binary") + " :: " + peer.info_hash.toString());
-					peer.emit("error");
-					reject();
-				}
-			});
-		})
-		.then(attachListeners);
-		return output;
+		peer.once("message", function(msg){
+			if(msg.type === -1 && msg.info_hash.toString("binary") === peer.info_hash){
+				debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake received");
+				attachListeners(peer);
+			}
+			else{
+				debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake failed :: info_hash " + msg.info_hash.toString("binary") + " :: " + peer.info_hash.toString());
+				peer.emit("error");
+			}
+		});
 	};
 
 	function attachListeners(peer){
@@ -580,34 +583,32 @@ function main(arg){
 			switch(msg.type){
 				case messageParse.types["choke"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - CHOKE");
-					peer.choke = true;
+					peer.choked = true;
 					updateRequests(peer);
 					break;
 				case messageParse.types["unchoke"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - UNCHOKE");
-					peer.choke = false;
+					peer.choked = false;
 					updateRequests(peer);
 					break;
 				case messageParse.types["interested"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - INTERESTED");
-					peer.peerInterest = true;
+					//  UPLOADING
 					break;
 				case messageParse.types["not interested"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - NOT INTERESTED");
-					peer.peerInterest = false;
+					//  UPLOADING
 					break;
 				case messageParse.types["have"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - HAVE");
-					console.log(msg);
 					var prev = peer.availPieces.readUInt8(Math.floor(msg.index / 8));
 					peer.availPieces.writeUInt8((1 << (7 - (msg.index % 8))) | prev, Math.floor(msg.index / 8));
 					rarity[msg.index]++;
 					updateRequests(peer);
-					console.log(rarity);
 					break;
 				case messageParse.types["bitfield"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - BITFIELD");
-					//  Actual code is in the bitfield listener, debug statement stays here to show
+					//  NOTE: Actual code is in the bitfield listener, debug statement stays here to show
 					//	if any bitfield message come in, even if later
 					break;
 				case messageParse.types["request"]:
@@ -629,19 +630,46 @@ function main(arg){
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - UNKNOWN");
 			}
 		});
+		peer.once("message", function(msg){
+			var temp;
+			var mask;
+			if(msg.type === messageParse.types["bitfield"]){
+				peer.availPieces = msg.bitfield;
+				for(var i = 0; i < peer.availPieces.length; i++){
+					temp = peer.availPieces.readUInt8(i);
+					mask = 0x80;
+					for(var j = 0; j < 8; j++){
+						if(temp & mask){
+							rarity[(i * 8) + j]++;
+						}
+						mask = mask >> 1;
+					}
+				}
+			}
+		});
 	};
 
 	function updateRequests(peer){
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: Updating Requests...");
-		console.log(peer.availPieces);
 		if(!peer.choked){
 			
 		}
-		else{
-			if(peer.interested){
+		else if(!peer.interested){
+			var temp;
+			var temp2;
+			var mask;
+			var interested = false;
+			for(var i = 0; i < peer.availPieces.length && !interested; i++){
+				temp = peer.availPieces.readUInt8(i);
+				temp2 = piecePossession.readUInt8(i);
+				mask = 0x80;
+				for(var j = 0; j < 8 && !interested; j++){
+					interested = (temp2 & mask) === 0 && (temp & mask) === 1;
+					mask = mask >> 1;
+				}
 			}
-			else{
-				
+			if(interested){
+				peer.send({type: messageParse.types["interested"]});
 			}
 		}
 	}

@@ -56,6 +56,11 @@ function Peer(ip, port, fileLength, info_hash){
 		});
 		this.socket.setTimeout(DEFAULT.PEER_TIMEOUT);
 	};
+	
+	this.send = function(msg){
+		debug("Peer: " + this.ip + ":" + this.port + " :: Sending message " + messageParse.types[msg.type]);
+		this.socket.write(messageParse.pkg(msg));
+	}
 };
 
 Peer.prototype = Object.create(Event.EventEmitter.prototype);

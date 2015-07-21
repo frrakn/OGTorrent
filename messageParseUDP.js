@@ -42,7 +42,7 @@ var parse = function parse(buffer){
 				break;
 			case 1:
 				if(buffer.length >= 20){
-					var peerIP;
+					var ip;
 					var port;
 					output.transaction_id = buffer.readUInt32BE(index);
 					index += 4;
@@ -54,9 +54,9 @@ var parse = function parse(buffer){
 					index += 4;
 					output.peers = [];
 					while(buffer.length - index >= 6){
-						peerIP = buffer.readUInt8(index) + "." + buffer.readUInt8(index + 1) + "." + buffer.readUInt8(index + 2) + "." + buffer.readUInt8(index + 3);
+						ip = buffer.readUInt8(index) + "." + buffer.readUInt8(index + 1) + "." + buffer.readUInt8(index + 2) + "." + buffer.readUInt8(index + 3);
 						port = buffer.readUInt16BE(index + 4);
-						output.peers.push({peerIP: peerIP, port:port});
+						output.peers.push({ip: ip, port:port});
 						index += 6;
 					}
 				}

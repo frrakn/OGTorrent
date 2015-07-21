@@ -30,6 +30,7 @@ var parse = function parse(buffer){
 	}
 	else if(len === 323119476 && buffer.slice(1, 20).toString() === "BitTorrent protocol"){
 		output = {type: -1, info_hash: buffer.slice(28, 48)};
+		len = 64;
 	}
 	else{
 		id = buffer.readUInt8(4);
