@@ -139,6 +139,12 @@ function main(arg){
 	var events = new Event.EventEmitter();
 	var chunkPossession;
 	var piecePossession;
+	var completedChunks = 0;
+	var rarestFirstThresh;
+	var totalPieces;
+	var totalChunks;
+	var focusPiece;
+	var chunksInPiece;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -155,7 +161,9 @@ function main(arg){
 	var stageInit = stageReadTorrent.then(function(data){
 		debug("*****     Parsing torrent file...     *****");
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
-		for(var i = 0; i < torrentFile.info.pieces.length / 20; i++){
+		totalPieces = torrentFile.info.pieces.length / 20;
+		chunksInPiece = Math.ceil(torrentFile.info["piece length"] / DEFAULT.CHUNK_BYTES);
+		for(var i = 0; i < totalPieces; i++){
 			rarity[i] = 0;
 		}
 		debug("*****     Populating available trackers...     *****");
@@ -186,8 +194,16 @@ function main(arg){
 		for(var i = 0; i < downloads.length; i++){
 			totalBytes += downloads[i][1];
 		}
-		piecePossession = new Buffer(torrentFile.info.pieces.length / 20);
-		chunkPossession = new Buffer(Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES));
+		totalChunks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
+		piecePossession = new Buffer(totalPieces);
+		chunkPossession = new Buffer(totalChunks);
+		rarestFirstThresh = DEFAULT.RARESTFIRST_THRESH_PERCENTAGE * totalChunks;
+		events.once("rf", function(){
+			debug("*****     Entering Rarest First requesting stage... :: Completed Chunks - " + completedChunks + " Threshhold - " + rarestFirstThresh + "     *****");
+		});
+		events.once("endgame", function(){
+			debug("*****     Entering Endgame requesting stage... :: Completed Chunks - " + completedChunks + "     *****");
+		});
 		server = net.createServer();
 		server.listen(6881);
 		debug("*****     Exiting init stage, beginning main stage...     *****");
@@ -278,7 +294,7 @@ function main(arg){
 					for(var i = 0; i < newPeers.length; i+=6){
 						ip = newPeers.charCodeAt(i) + "." + newPeers.charCodeAt(i + 1) + "." + newPeers.charCodeAt(i + 2) + "." + newPeers.charCodeAt(i + 3);
 						port = (newPeers.charCodeAt(i + 4) * 256) + newPeers.charCodeAt(i + 5);
-						peers.push(new Peer(ip, port, torrentFile.info.pieces.length / 20, unescape(params.info_hash)));
+						peers.push(new Peer(ip, port, totalPieces, unescape(params.info_hash)));
 					}
 					resolve();
 				});
@@ -440,7 +456,7 @@ function main(arg){
 				socket.close();
 				send.cancel();
 				for(var i = 0; i < result.peers.length; i++){
-					peers.push(new Peer(result.peers[i].ip, result.peers[i].port, torrentFile.info.pieces.length / 20, parseHex(params.info_hash)));
+					peers.push(new Peer(result.peers[i].ip, result.peers[i].port, totalPieces, parseHex(params.info_hash)));
 				}	
 				return checkPeers();
 			}
@@ -515,18 +531,16 @@ function main(arg){
 			peer.on("close", reject);
 			peer.on("error", reject);
 			peer.on("timeout", function(){
-				debug("Peer: " + peer.ip + ":" + peer.port + " :: Timed out");
-				closePeer(peer);
+				closePeer(peer, "Timed out");
 			});
 			peer.on("error", function(err){
-				debug("Peer: " + peer.ip + ":" + peer.port + " :: Error :: " + err);
-				closePeer(peer);
+				closePeer(peer, err);
 			});
 			peer.on("close", function(){
-				closePeer(peer);
+				closePeer(peer, "Connection was closed");
 			});
 			peer.on("pieceTimeout", function(){
-				closePeer(peer);
+				closePeer(peer, "No pieces received - Timed out");
 			});
 		})
 		.then(function(currentPeer){
@@ -538,7 +552,8 @@ function main(arg){
 		return output;
 	};
 
-	function closePeer(peer){
+	function closePeer(peer, reason){
+		debug("Peer: " + peer.ip + ":" + peer.port + " :: DISCONNECTED :: " + reason);
 		connpeers.splice(connpeers.indexOf(peer), 1);
 		peer.socket.end();
 		checkPeers();
@@ -650,25 +665,50 @@ function main(arg){
 	};
 
 	function updateRequests(peer){
-		debug("Peer: " + peer.ip + ":" + peer.port + " :: Updating Requests...");
+		var numNewRequests;
+		var leftOverChunks;
+		var temp;
+		var newRequests = [];
+		var foundPiece;
+		debug("Peer: " + peer.ip + ":" + peer.port + " :: Status - Choked: " + peer.choked + " Sent Interest: " + peer.interested + " :: Updating Requests...");
 		if(!peer.choked){
-			
+			numNewRequests = DEFAULT.MAX_PEER_REQUESTS - peer.requests.length;
+			leftOverChunks = totalChunks - completedChunks - connpeers.map(function(peer){return peer.requests.length}).reduce(function(agg, element){return agg + element});
+			if(leftOverChunks === 0){
+				events.emit("endgame");
+			}
+			else if(completedChunks > rarestFirstThresh){
+				events.emit("rf");
+			}
+			else{
+				console.log(chunksInPiece);
+				while(newRequests.length > Math.min(numNewRequests, leftOverChunks)){
+					if(!focusPiece){
+						foundPiece = false;
+						while(!foundPiece){
+							temp = Math.floor(Math.random() * totalPieces);
+							console.log("Piece number " + temp);
+							foundPiece = !(piecePossession.readUInt8(Math.floor(temp / 8)) & (1 << (7 - (temp % 8))))
+						}
+					}
+						
+				}
+			}
 		}
 		else if(!peer.interested){
 			var temp;
 			var temp2;
 			var mask;
-			var interested = false;
-			for(var i = 0; i < peer.availPieces.length && !interested; i++){
+			for(var i = 0; i < peer.availPieces.length && !peer.interested; i++){
 				temp = peer.availPieces.readUInt8(i);
 				temp2 = piecePossession.readUInt8(i);
 				mask = 0x80;
-				for(var j = 0; j < 8 && !interested; j++){
-					interested = (temp2 & mask) === 0 && (temp & mask) === 1;
+				for(var j = 0; j < 8 && !peer.interested; j++){
+					peer.interested = (temp2 & mask) === 0 && (temp & mask) === 1;
 					mask = mask >> 1;
 				}
 			}
-			if(interested){
+			if(peer.interested){
 				peer.send({type: messageParse.types["interested"]});
 			}
 		}
