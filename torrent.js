@@ -144,6 +144,8 @@ function main(arg){
 	var totalChunks;
 	var chunksInPiece;
 	var requestedChunks;
+	var endgameRequests;
+	var completedPieces;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -163,8 +165,8 @@ function main(arg){
 		totalPieces = torrentFile.info.pieces.length / 20;
 		chunksInPiece = Math.ceil(torrentFile.info["piece length"] / DEFAULT.CHUNK_BYTES);
 		for(var i = 0; i < totalPieces; i++){
-			rarity[i] = 0;
-			requestTracker[i] = 0;
+			rarity.push(0);
+			requestTracker.push(0);
 		}
 		debug("*****     Populating available trackers...     *****");
 		info_hash = SHA1(bencoder.bencode(torrentFile.info));
@@ -203,6 +205,8 @@ function main(arg){
 		});
 		events.once("endgame", function(){
 			debug("*****     Entering Endgame requesting stage...     *****");
+			endgameRequests = lostRequests;
+			endgameRequests = endgameRequests.concat.apply(endgameRequests, connpeers.map(function(peer){return peer.availPieces}));
 			torrentState = "endgame";
 		});
 		server = net.createServer();
@@ -670,13 +674,26 @@ function main(arg){
 		var newRequests = [];
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: Status - Choked: " + peer.choked + " Sent Interest: " + peer.interested + " :: Updating Requests...");
 		if(!peer.choked){
-			numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalChunks - requestedChunks);
-			if(numNewRequests > 0){
-				if(torrentState === "endgame"){
+			if(torrentState === "endgame"){
+				for(var i = 0; i < endgameRequests.length; i++){
+					peer.send({type: messageParse.types["request"], index: endgameRequests[i].piece, begin: endgameRequests[i].chunk, length: DEFAULT.CHUNK_BYTES});
 				}
-				else if(torrentState === "rf"){
+			}
+			else{
+				numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalChunks - requestedChunks);
+				if(lostRequests.length > 0){
+					for(var i = 0; i < lostRequests.length && newRequests.length < numNewRequests; i++){
+						//  TODO
+					}
 				}
-				else{
+				if(newRequests.length < numNewRequests && peer.availPieces.length > 0){
+				}
+				if(newRequests.length < numNewRequests){
+					if(torrentState === "rf"){
+					}
+					else{
+						
+					}
 				}
 			}
 		}
