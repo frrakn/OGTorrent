@@ -1,4 +1,3 @@
-"use strict";
 
 //  TODO: UPLOADING
 
@@ -126,9 +125,9 @@ function prepFile(filepath, filesize){
 
 function main(arg){
 	var torrentFile;
-	var torrentState = "standard";
-	var downloads = [];
-	var server;
+	var torrentState = "opening"; // opening - random piece selection until DEFAULT.RARESTFIRST_THRESH pieces completed
+	var downloads = [];           // rf - random rarest first selection
+	var server;                   // endgame - request out all outstanding chunks to all peers
 	var trackers = [];
 	var info_hash;
 	var peerid;
@@ -139,12 +138,12 @@ function main(arg){
 	var events = new Event.EventEmitter();
 	var chunkPossession;
 	var piecePossession;
-	var completedChunks = 0;
-	var rarestFirstThresh;
+	var requestTracker = [];
+	var lostRequests = [];
 	var totalPieces;
 	var totalChunks;
-	var focusPiece;
 	var chunksInPiece;
+	var requestedChunks;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -165,6 +164,7 @@ function main(arg){
 		chunksInPiece = Math.ceil(torrentFile.info["piece length"] / DEFAULT.CHUNK_BYTES);
 		for(var i = 0; i < totalPieces; i++){
 			rarity[i] = 0;
+			requestTracker[i] = 0;
 		}
 		debug("*****     Populating available trackers...     *****");
 		info_hash = SHA1(bencoder.bencode(torrentFile.info));
@@ -195,14 +195,15 @@ function main(arg){
 			totalBytes += downloads[i][1];
 		}
 		totalChunks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
-		piecePossession = new Buffer(totalPieces);
-		chunkPossession = new Buffer(totalChunks);
-		rarestFirstThresh = DEFAULT.RARESTFIRST_THRESH_PERCENTAGE * totalChunks;
+		piecePossession = new Buffer(Math.ceil(totalPieces / 8));
+		chunkPossession = new Buffer(Math.ceil(totalChunks / 8));
 		events.once("rf", function(){
-			debug("*****     Entering Rarest First requesting stage... :: Completed Chunks - " + completedChunks + " Threshhold - " + rarestFirstThresh + "     *****");
+			debug("*****     Entering Rarest First requesting stage...     *****");
+			torrentState = "rf";
 		});
 		events.once("endgame", function(){
-			debug("*****     Entering Endgame requesting stage... :: Completed Chunks - " + completedChunks + "     *****");
+			debug("*****     Entering Endgame requesting stage...     *****");
+			torrentState = "endgame";
 		});
 		server = net.createServer();
 		server.listen(6881);
@@ -666,32 +667,16 @@ function main(arg){
 
 	function updateRequests(peer){
 		var numNewRequests;
-		var leftOverChunks;
-		var temp;
 		var newRequests = [];
-		var foundPiece;
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: Status - Choked: " + peer.choked + " Sent Interest: " + peer.interested + " :: Updating Requests...");
 		if(!peer.choked){
-			numNewRequests = DEFAULT.MAX_PEER_REQUESTS - peer.requests.length;
-			leftOverChunks = totalChunks - completedChunks - connpeers.map(function(peer){return peer.requests.length}).reduce(function(agg, element){return agg + element});
-			if(leftOverChunks === 0){
-				events.emit("endgame");
-			}
-			else if(completedChunks > rarestFirstThresh){
-				events.emit("rf");
-			}
-			else{
-				console.log(chunksInPiece);
-				while(newRequests.length > Math.min(numNewRequests, leftOverChunks)){
-					if(!focusPiece){
-						foundPiece = false;
-						while(!foundPiece){
-							temp = Math.floor(Math.random() * totalPieces);
-							console.log("Piece number " + temp);
-							foundPiece = !(piecePossession.readUInt8(Math.floor(temp / 8)) & (1 << (7 - (temp % 8))))
-						}
-					}
-						
+			numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalChunks - requestedChunks);
+			if(numNewRequests > 0){
+				if(torrentState === "endgame"){
+				}
+				else if(torrentState === "rf"){
+				}
+				else{
 				}
 			}
 		}
