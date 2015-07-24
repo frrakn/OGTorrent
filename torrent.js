@@ -197,6 +197,7 @@ function main(arg){
 			totalBytes += downloads[i][1];
 		}
 		totalChunks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
+		requestedChunks = 0;
 		piecePossession = new Buffer(Math.ceil(totalPieces / 8));
 		chunkPossession = new Buffer(Math.ceil(totalChunks / 8));
 		events.once("rf", function(){
@@ -672,28 +673,44 @@ function main(arg){
 	function updateRequests(peer){
 		var numNewRequests;
 		var newRequests = [];
+		var temp;
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: Status - Choked: " + peer.choked + " Sent Interest: " + peer.interested + " :: Updating Requests...");
 		if(!peer.choked){
 			if(torrentState === "endgame"){
 				for(var i = 0; i < endgameRequests.length; i++){
-					peer.send({type: messageParse.types["request"], index: endgameRequests[i].piece, begin: endgameRequests[i].chunk, length: DEFAULT.CHUNK_BYTES});
+					peer.sendRequest(endgameRequests[i]);
 				}
 			}
 			else{
 				numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalChunks - requestedChunks);
 				if(lostRequests.length > 0){
 					for(var i = 0; i < lostRequests.length && newRequests.length < numNewRequests; i++){
-						//  TODO
+						//  TODO - any removed peers
 					}
 				}
-				if(newRequests.length < numNewRequests && peer.availPieces.length > 0){
+				while(newRequests.length < numNewRequests && peer.requests.length > 0){
+					//  TODO - completing pieces
 				}
-				if(newRequests.length < numNewRequests){
+				while(newRequests.length < numNewRequests){
 					if(torrentState === "rf"){
+						//  TODO - rarity based requesting
 					}
 					else{
-						
+						temp = Math.floor(Math.random() * totalPieces);
+						while(!(peer.availPieces.readUInt8(Math.floor(temp / 8)) & (1 << (7 - temp % 8)))){
+							temp++;
+							if(temp === totalPieces){
+								temp = 0;
+							}
+						}
+						for(var i = requestTracker[temp]; (i < chunksInPiece) && ((i - requestTracker[temp]) < (numNewRequests - newRequests.length)); i++){
+							newRequests.push({piece: temp, begin: i});
+							requestTracker[temp]++;
+						}
 					}
+				}
+				for(var i = 0; i < newRequests.length; i++){
+					peer.sendRequest(newRequests[i]);
 				}
 			}
 		}
