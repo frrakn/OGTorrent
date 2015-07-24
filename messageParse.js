@@ -57,7 +57,7 @@ var parse = function parse(buffer){
 				output = (len === 13 && (buffer.length >= (4 + len))) ? {type: types["request"], index: buffer.readUInt32BE(5), begin: buffer.readUInt32BE(9), length: buffer.readUInt32BE(13)} : null;
 				break;
 			case 7:
-				output = buffer.length >= (4 + len) ? {type: types["piece"], index: buffer.readUInt32BE(5), begin: buffer.readUInt32BE(9), block: buffer.slice(13, buffer.length)} : null;
+				output = buffer.length >= (4 + len) ? {type: types["piece"], index: buffer.readUInt32BE(5), begin: buffer.readUInt32BE(9), block: buffer.slice(13, 4 + len)} : null;
 				break;
 			case 8:
 				output = (len === 13 && (buffer.length >= (4 + len))) ? {type: types["cancel"], index: buffer.readUInt32BE(5), begin: buffer.readUInt32BE(9), length: buffer.readUInt32BE(13)} : null;

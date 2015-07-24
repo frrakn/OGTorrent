@@ -62,7 +62,25 @@ function Peer(ip, port, fileLength, info_hash){
 		this.socket.write(messageParse.pkg(msg));
 	}
 	this.sendRequest = function(request){
-		this.send({type: messageParse.types["request"], index: request.piece, begin: request.begin * DEFAULT.CHUNK_BYTES, length: DEFAULT.CHUNK_BYTES});
+		this.send({type: messageParse.types["request"], index: request.piece, begin: request.block * DEFAULT.CHUNK_BYTES, length: DEFAULT.CHUNK_BYTES});
+		this.requests.push(request);
+	}
+	this.hasRequested = function(piece, block){
+		var requested = false;
+		for(var i = 0; i < this.requests.length && !requested; i++){
+			requested = requested || (this.requests[i].piece === piece && this.requests[i].block === block);
+		}
+		return requested;
+	}
+	this.removeRequest = function(piece, block){
+		var removed = false;
+		for(var i = 0; i < this.requests.length && !removed; i++){
+			removed = removed || (this.requests[i].piece === piece && this.requests[i].block === block);
+			if(removed){
+				this.requests.splice(i, 1);
+			}
+		}
+		return removed;
 	}
 };
 

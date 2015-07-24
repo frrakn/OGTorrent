@@ -108,8 +108,9 @@ function prepFile(filepath, filesize){
 				resolve(fd);
 			}
 		});
-	})
-	.then(function(fd){
+	});
+
+	openFile.then(function(fd){
 		fs.ftruncate(fd, filesize, function(err){
 			if(err){
 				throw err;
@@ -127,7 +128,7 @@ function main(arg){
 	var torrentFile;
 	var torrentState = "opening"; // opening - random piece selection until DEFAULT.RARESTFIRST_THRESH pieces completed
 	var downloads = [];           // rf - random rarest first selection
-	var server;                   // endgame - request out all outstanding chunks to all peers
+	var server;                   // endgame - request out all outstanding blocks to all peers
 	var trackers = [];
 	var info_hash;
 	var peerid;
@@ -136,14 +137,14 @@ function main(arg){
 	var connpeers = [];
 	var rarity = [];
 	var events = new Event.EventEmitter();
-	var chunkPossession;
+	var blockPossession;
 	var piecePossession;
 	var requestTracker = [];
 	var lostRequests = [];
 	var totalPieces;
-	var totalChunks;
-	var chunksInPiece;
-	var requestedChunks;
+	var totalBlocks;
+	var blocksInPiece;
+	var requestedBlocks;
 	var endgameRequests;
 	var completedPieces;
 
@@ -163,7 +164,7 @@ function main(arg){
 		debug("*****     Parsing torrent file...     *****");
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
 		totalPieces = torrentFile.info.pieces.length / 20;
-		chunksInPiece = Math.ceil(torrentFile.info["piece length"] / DEFAULT.CHUNK_BYTES);
+		blocksInPiece = Math.ceil(torrentFile.info["piece length"] / DEFAULT.CHUNK_BYTES);
 		for(var i = 0; i < totalPieces; i++){
 			rarity.push(0);
 			requestTracker.push(0);
@@ -189,17 +190,17 @@ function main(arg){
 					return function(){
 						return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
 					}
-				})(i)),torrentFile.info.files[i].length]);
+				})(i)), torrentFile.info.files[i].length]);
 			}
 		}
 		totalBytes = 0;
 		for(var i = 0; i < downloads.length; i++){
 			totalBytes += downloads[i][1];
 		}
-		totalChunks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
-		requestedChunks = 0;
+		totalBlocks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
+		requestedBlocks = 0;
 		piecePossession = new Buffer(Math.ceil(totalPieces / 8));
-		chunkPossession = new Buffer(Math.ceil(totalChunks / 8));
+		blockPossession = new Buffer(Math.ceil(totalBlocks / 8));
 		events.once("rf", function(){
 			debug("*****     Entering Rarest First requesting stage...     *****");
 			torrentState = "rf";
@@ -637,6 +638,30 @@ function main(arg){
 					break;
 				case messageParse.types["piece"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - PIECE");
+					var byteIndex;
+					var bytesToWrite;
+					var leftoverBuf = msg.block;
+					var fileIndex = 0;
+					if(peer.hasRequested(msg.index, msg.begin / DEFAULT.CHUNK_BYTES)){
+						peer.removeRequest(msg.index, msg.begin / DEFAULT.CHUNK_BYTES);
+						
+						byteIndex = msg.index * DEFAULT.CHUNK_BYTES + msg.begin;
+						while(byteIndex > downloads[fileIndex][1]){
+							byteIndex -= downloads[fileIndex][1];
+							fileIndex ++;
+						}
+						while(leftoverBuf.length > 0){
+							bytesToWrite = Math.min(downloads[fileIndex][1] - byteIndex, DEFAULT.CHUNK_BYTES, leftoverBuf.length);
+							(function(buffer, bytes, index){	
+								downloads[fileIndex][0].then(function(fd){
+									fs.write(fd, buffer, 0, bytes, index);
+								});
+							})(leftoverBuf.slice(0, bytesToWrite), bytesToWrite, byteIndex);
+							leftoverBuf = leftoverBuf.slice(bytesToWrite, leftoverBuf.length);
+							byteIndex = 0;
+						}
+ 					}
+					updateRequests(peer);
 					break;
 				case messageParse.types["cancel"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - CANCEL");
@@ -682,35 +707,36 @@ function main(arg){
 				}
 			}
 			else{
-				numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalChunks - requestedChunks);
+				numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalBlocks - requestedBlocks);
 				if(lostRequests.length > 0){
 					for(var i = 0; i < lostRequests.length && newRequests.length < numNewRequests; i++){
 						//  TODO - any removed peers
 					}
 				}
-				while(newRequests.length < numNewRequests && peer.requests.length > 0){
+				//while(newRequests.length < numNewRequests && peer.requests.length > 0){
 					//  TODO - completing pieces
-				}
+				//}
 				while(newRequests.length < numNewRequests){
 					if(torrentState === "rf"){
 						//  TODO - rarity based requesting
 					}
 					else{
 						temp = Math.floor(Math.random() * totalPieces);
-						while(!(peer.availPieces.readUInt8(Math.floor(temp / 8)) & (1 << (7 - temp % 8)))){
+						while(!(peer.availPieces.readUInt8(Math.floor(temp / 8)) & (1 << (7 - temp % 8))) && !(requestTracker[temp] < blocksInPiece)){
 							temp++;
 							if(temp === totalPieces){
 								temp = 0;
 							}
 						}
-						for(var i = requestTracker[temp]; (i < chunksInPiece) && ((i - requestTracker[temp]) < (numNewRequests - newRequests.length)); i++){
-							newRequests.push({piece: temp, begin: i});
+						for(var i = requestTracker[temp]; (i < blocksInPiece) && ((i - requestTracker[temp]) < (numNewRequests - newRequests.length)); i++){
+							newRequests.push({piece: temp, block: i});
 							requestTracker[temp]++;
 						}
 					}
 				}
 				for(var i = 0; i < newRequests.length; i++){
 					peer.sendRequest(newRequests[i]);
+					requestedBlocks++;
 				}
 			}
 		}
