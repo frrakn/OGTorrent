@@ -28,11 +28,11 @@ var parse = function parse(buffer){
 	if(len === 0){
 		output = {type: types["keep-alive"]};
 	}
-	else if(len === 323119476 && buffer.slice(1, 20).toString() === "BitTorrent protocol"){
+	else if(buffer.length >= 68 && len === 323119476 && buffer.slice(1, 20).toString() === "BitTorrent protocol"){
 		output = {type: -1, info_hash: buffer.slice(28, 48)};
 		len = 64;
 	}
-	else{
+	else if(buffer.length >= 5){
 		id = buffer.readUInt8(4);
 		switch(id){
 			case 0:
@@ -66,6 +66,9 @@ var parse = function parse(buffer){
 				output = (len === 3 && (buffer.length >= (4 + len))) ? {type: types["port"], listenPort: buffer.readUInt16BE(5)} : null;
 				break;	
 		}
+	}
+	else{
+		output = null;
 	}
 	if(output){
 		buffer = buffer.slice(4 + len, buffer.length);

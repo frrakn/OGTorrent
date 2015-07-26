@@ -234,7 +234,9 @@ function main(arg){
 		}
 		else if(connpeers.length < DEFAULT.MAX_CONNPEERS && peers.length > 0){
 			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length + " :: Connecting to new peers...");
-			output.then(connectPeer);
+			for(var i = 0; i < Math.min(peers.length, DEFAULT.MAX_CONNPEERS); i++){
+				output.then(connectPeer);
+			}
 		}
 		else{
 			//  TODO If no more trackers and peers are not good enough, set a timeout to allow any outstanding tracker requests to come in, and then give up and exit program	

@@ -30,7 +30,7 @@ function Peer(ip, port, fileLength, info_hash){
 			temp = messageParse.parse(self.messageBuffer);
 			message = temp[1];
 			self.messageBuffer = temp[0];
-			if(message != null){
+			if(message){
 				self.emit("message", message);
 			}
 		}
