@@ -145,8 +145,9 @@ function main(arg){
 	var totalBlocks;
 	var blocksInPiece;
 	var requestedBlocks;
-	var endgameRequests;
 	var completedPieces;
+	var endgameRequests;
+	var pieceLength;
 
 	var stageReadTorrent = new Promise(function(resolve, reject){
 		debug("*****     Reading torrent file...     *****");
@@ -164,7 +165,8 @@ function main(arg){
 		debug("*****     Parsing torrent file...     *****");
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
 		totalPieces = torrentFile.info.pieces.length / 20;
-		blocksInPiece = Math.ceil(torrentFile.info["piece length"] / DEFAULT.CHUNK_BYTES);
+		pieceLength = torrentFile.info["piece length"];
+		blocksInPiece = Math.ceil(pieceLength / DEFAULT.CHUNK_BYTES);
 		for(var i = 0; i < totalPieces; i++){
 			rarity.push(0);
 			requestTracker.push(0);
@@ -645,7 +647,7 @@ function main(arg){
 					if(peer.hasRequested(msg.index, msg.begin / DEFAULT.CHUNK_BYTES)){
 						peer.removeRequest(msg.index, msg.begin / DEFAULT.CHUNK_BYTES);
 						
-						byteIndex = msg.index * DEFAULT.CHUNK_BYTES + msg.begin;
+						byteIndex = msg.index * pieceLength + msg.begin;
 						while(byteIndex > downloads[fileIndex][1]){
 							byteIndex -= downloads[fileIndex][1];
 							fileIndex ++;
@@ -758,6 +760,59 @@ function main(arg){
 			}
 		}
 	}
+
+	function checkPiece(piece){
+		debug("Checking SHA1 hash of piece " + piece);
+		var byteIndex = piece * pieceLength;
+		var fileIndex = 0;
+		while(byteIndex > downloads[fileIndex][1]){
+			byteIndex -= downloads[fileIndex][1];
+			fileIndex ++;
+		}
+		return readPiece(0, byteIndex, DEFAULT.CHUNK_BYTES, fileIndex).then(checkHash);
+	};
+	
+	function readPiece(bufStart, fileStart, leftoverBytes, fileNum, buffer){
+		var output = Promise.resolve();
+		buffer = buffer || new Buffer(leftoverBytes);
+		if(leftoverBytes > 0){
+			if((downloads[fileNum][1] - fileStart) >= leftoverBytes){
+				output = new Promise(function(resolve, reject){
+					downloads[fileNum][0].then(function(fd){
+						fs.read(fd, buffer, bufStart, leftoverBytes, fileStart, function(err, bytesRead, buf){
+							if(err){
+								reject("fs read error");
+							}
+							else{
+								resolve(buffer);
+							}
+						});
+					});
+				});
+			}
+			else{
+				output = new Promise(function(resolve, reject){
+					downloads[fileNum][0].then(function(fd){
+						fs.read(fd, buffer, bufStart, downloads[fileNum][1] - fileStart, fileStart, function(err, bytesRead, buf){
+							if(err){
+								reject();
+							}
+							else{
+								resolve(buffer);
+							}
+						});
+					})
+					.then(function(){
+						readPiece(bufStart + downloads[fileNum][1] - fileStart, 0, leftoverBytes - downloads[fileNum][1] + fileStart, fileNum + 1, buffer);
+					});
+				});	
+			}
+		}
+		else{
+			output = Promise.resolve();
+		}
+		return output;
+	};
 };
 
 main(args[2]);
