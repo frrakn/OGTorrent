@@ -139,6 +139,7 @@ function main(arg){
 	var events = new Event.EventEmitter();
 	var blockPossession;
 	var piecePossession;
+	var blocksDownloaded = [];
 	var requestTracker = [];
 	var lostRequests = [];
 	var totalPieces;
@@ -170,6 +171,7 @@ function main(arg){
 		for(var i = 0; i < totalPieces; i++){
 			rarity.push(0);
 			requestTracker.push(0);
+			blocksDownloaded.push(0);
 		}
 		debug("*****     Populating available trackers...     *****");
 		info_hash = SHA1(bencoder.bencode(torrentFile.info));
@@ -645,25 +647,15 @@ function main(arg){
 					var leftoverBuf = msg.block;
 					var fileIndex = 0;
 					if(peer.hasRequested(msg.index, msg.begin / DEFAULT.CHUNK_BYTES)){
-						peer.removeRequest(msg.index, msg.begin / DEFAULT.CHUNK_BYTES);
-						
 						byteIndex = msg.index * pieceLength + msg.begin;
 						while(byteIndex > downloads[fileIndex][1]){
 							byteIndex -= downloads[fileIndex][1];
 							fileIndex ++;
 						}
-						while(leftoverBuf.length > 0){
-							bytesToWrite = Math.min(downloads[fileIndex][1] - byteIndex, DEFAULT.CHUNK_BYTES, leftoverBuf.length);
-							(function(buffer, bytes, index){	
-								downloads[fileIndex][0].then(function(fd){
-									fs.write(fd, buffer, 0, bytes, index);
-								});
-							})(leftoverBuf.slice(0, bytesToWrite), bytesToWrite, byteIndex);
-							leftoverBuf = leftoverBuf.slice(bytesToWrite, leftoverBuf.length);
-							byteIndex = 0;
-						}
+						writeBlock(msg.block, fileIndex, byteIndex).then(function(){
+							writeComplete(peer, msg.index, msg.begin / DEFAULT.CHUNK_BYTES);
+						});
  					}
-					updateRequests(peer);
 					break;
 				case messageParse.types["cancel"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - CANCEL");
@@ -695,6 +687,40 @@ function main(arg){
 				}
 			}
 		});
+	};
+
+	function writeComplete(peer, piece, block){
+		peer.removeRequest(piece, block);
+		updateRequests(peer);
+	};
+
+	function writeBlock(buffer, fileIndex, byteIndex){
+		var output;
+		if(buffer.length > 0){
+			if(buffer.length > (downloads[fileIndex][1] - byteIndex)){
+				output = ((function(buf, bytes, index){
+					return new Promise(function(resolve, reject){
+						downloads[fileIndex][0].then(function(fd){
+							fs.write(fd, buf, 0, bytes, index, resolve);
+						});
+					});
+				})(buffer, downloads[fileIndex][1] - byteIndex, byteIndex))
+				.then(writeBlock(buffer.slice(downloads[fileIndex][1] - byteIndex), fileIndex + 1, 0));
+			}
+			else{
+				output = (function(buf, bytes, index){
+					return new Promise(function(resolve, reject){
+						downloads[fileIndex][0].then(function(fd){
+							fs.write(fd, buf, 0, bytes, index, resolve);
+						});
+					});
+				})(buffer, buffer.length, byteIndex);
+			}
+		}
+		else{
+			output = Promise.resolve();
+		}
+		return output;
 	};
 
 	function updateRequests(peer){
@@ -769,7 +795,9 @@ function main(arg){
 			byteIndex -= downloads[fileIndex][1];
 			fileIndex ++;
 		}
-		return readPiece(0, byteIndex, DEFAULT.CHUNK_BYTES, fileIndex).then(checkHash);
+		return readPiece(0, byteIndex, DEFAULT.CHUNK_BYTES, fileIndex).then(function(buffer){
+			checkHash(piece, buffer);
+		});
 	};
 	
 	function readPiece(bufStart, fileStart, leftoverBytes, fileNum, buffer){
@@ -813,6 +841,33 @@ function main(arg){
 		}
 		return output;
 	};
+
+	function checkHash(piece, buffer){
+		var hash = SHA1(buffer.toString("binary"));
+		console.log(hash);
+		console.log(torrentFile.info.pieces.substring(piece*20, (piece + 1) * 20));
+	};
 };
+
+/*
+
+ *** FILE I/O TESTING MATERIAL ***
+
+fs.open("./test1", "r+", cb);
+fs.open("./test2", "r+", cb);
+
+var downloads = [];
+var numFiles = 0;
+
+function cb(err, fd){
+	downloads.push([Promise.resolve(fd), 10]);
+	numFiles++;
+	if(numFiles === 2){
+		var buf = new Buffer("abcdefghijklmnopqrst");
+		writeBlock(buf, 0, 0);
+	}
+};
+
+*/
 
 main(args[2]);
