@@ -202,20 +202,24 @@ function main(arg){
 		totalBlocks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
 		requestedBlocks = 0;
 		completedPieces = 0;
-		events.once("rf", function(){
-			debug("*****     Entering Rarest First requesting stage...     *****");
-			torrentState = "rf";
-		});
-		events.once("endgame", function(){
-			debug("*****     Entering Endgame requesting stage...     *****");
-			endgameRequests = lostRequests;
-			endgameRequests = endgameRequests.concat.apply(endgameRequests, connpeers.map(function(peer){return peer.availPieces}));
-			torrentState = "endgame";
-		});
+		events.once("rf", rfListener);
+		events.once("endgame", endgameListener);
 		server = net.createServer();
 		server.listen(6881);
 		debug("*****     Exiting init stage, beginning main stage...     *****");
 	});
+
+	function rfListener(){
+		debug("*****     Entering Rarest First requesting stage...     *****");
+		torrentState = "rf";
+	}
+
+	function endgameListener(){
+		debug("*****     Entering Endgame requesting stage...     *****");
+		endgameRequests = lostRequests;
+		endgameRequests = endgameRequests.concat.apply(endgameRequests, connpeers.map(function(peer){return peer.availPieces}));
+		torrentState = "endgame";
+	}
 
 	var stageMain = stageInit
 	.then(checkPeers)
@@ -741,8 +745,10 @@ function main(arg){
 
 	function updateRequests(peer){
 		var numNewRequests;
+		var finishedRequests = 0;
 		var newRequests = [];
 		var temp;
+		var temp2;
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: Status - Choked: " + peer.choked + " Sent Interest: " + peer.interested + " :: Updating Requests...");
 		if(!peer.choked){
 			if(torrentState === "endgame"){
@@ -753,14 +759,14 @@ function main(arg){
 			else{
 				numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalBlocks - requestedBlocks);
 				if(lostRequests.length > 0){
-					for(var i = 0; i < lostRequests.length && newRequests.length < numNewRequests; i++){
+					for(var i = 0; i < lostRequests.length && finishedRequests < numNewRequests; i++){
 						//  TODO - any removed peers
 					}
 				}
 				//while(newRequests.length < numNewRequests && peer.requests.length > 0){
 					//  TODO - completing pieces
 				//}
-				while(newRequests.length < numNewRequests){
+				while(finishedRequests < numNewRequests){
 					if(torrentState === "rf"){
 						//  TODO - rarity based requesting
 					}
@@ -772,15 +778,17 @@ function main(arg){
 								temp = 0;
 							}
 						}
-						for(var i = requestTracker[temp]; (i < blocksInPiece) && ((i - requestTracker[temp]) < (numNewRequests - newRequests.length)); i++){
-							newRequests.push({piece: temp, block: i});
-							requestTracker[temp]++;
+						temp2 = requestTracker[temp];
+						for(var i = requestTracker[temp]; (i < blocksInPiece) && ((i - temp2) < (numNewRequests - finishedRequests)); i++){
+							sendRequest(peer, {piece: temp, block: i});
+							requestTracker[temp] ++;
+							requestedBlocks ++;
+							finishedRequests ++;
 						}
 					}
 				}
-				for(var i = 0; i < newRequests.length; i++){
-					sendRequest(peer, newRequests[i]);
-					requestedBlocks ++;
+				if(requestedBlocks === totalBlocks){
+					//events.emit("endgame");
 				}
 			}
 		}
@@ -877,8 +885,9 @@ function main(arg){
 			requestTracker[piece] = 0;
 			requestedBlocks -= blocksInPiece;
 			if(torrentState === "endgame"){
-				debug("*****     Re-entering rarest first stage     *****");
+				debug("*****     Re-entering rarest first stage...     *****");
 				torrentState = "rf";
+				events.once("endgame", endgameListener);
 				for(var i = 0; i < connpeers.length; i++){
 					connpeers.availPieces = [];
 				}
@@ -893,7 +902,6 @@ function main(arg){
 };
 
 /*
-
  *** FILE I/O TESTING MATERIAL ***
 
 fs.open("./test1", "r+", cb);
