@@ -61,8 +61,9 @@ function Peer(ip, port, fileLength, info_hash){
 		debug("Peer: " + this.ip + ":" + this.port + " :: Sending message " + messageParse.types[msg.type]);
 		this.socket.write(messageParse.pkg(msg));
 	}
-	this.sendRequest = function(request){
-		this.send({type: messageParse.types["request"], index: request.piece, begin: request.block * DEFAULT.CHUNK_BYTES, length: DEFAULT.CHUNK_BYTES});
+	this.sendRequest = function(request, length){
+		length = length || DEFAULT.CHUNK_BYTES;
+		this.send({type: messageParse.types["request"], index: request.piece, begin: request.block * DEFAULT.CHUNK_BYTES, length: length});
 		this.requests.push(request);
 	}
 	this.hasRequested = function(piece, block){
