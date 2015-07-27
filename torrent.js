@@ -137,8 +137,6 @@ function main(arg){
 	var connpeers = [];
 	var rarity = [];
 	var events = new Event.EventEmitter();
-	var blockPossession;
-	var piecePossession;
 	var blocksDownloaded = [];
 	var requestTracker = [];
 	var lostRequests = [];
@@ -203,8 +201,7 @@ function main(arg){
 		}
 		totalBlocks = Math.ceil(totalBytes / DEFAULT.CHUNK_BYTES);
 		requestedBlocks = 0;
-		piecePossession = new Buffer(Math.ceil(totalPieces / 8));
-		blockPossession = new Buffer(Math.ceil(totalBlocks / 8));
+		completedPieces = 0;
 		events.once("rf", function(){
 			debug("*****     Entering Rarest First requesting stage...     *****");
 			torrentState = "rf";
@@ -232,7 +229,7 @@ function main(arg){
 			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length + " :: Adding additional peers...");
 			output.then(populatePeers);
 		}
-		else if(connpeers.length < DEFAULT.MAX_CONNPEERS && peers.length > 0){
+		if(connpeers.length < DEFAULT.MAX_CONNPEERS && peers.length > 0){
 			debug("Connected Peers: " + connpeers.length + ", Peers: " + peers.length + ", Trackers: " + trackers.length + " :: Connecting to new peers...");
 			for(var i = 0; i < Math.min(peers.length, DEFAULT.MAX_CONNPEERS); i++){
 				output.then(connectPeer);
@@ -693,7 +690,15 @@ function main(arg){
 
 	function writeComplete(peer, piece, block){
 		peer.removeRequest(piece, block);
-		updateRequests(peer);
+		blocksDownloaded[piece]++;
+		if(blocksDownloaded[piece] === blocksInPiece){
+			checkPiece(piece).then(function(){
+				updateRequests(peer);
+			})
+		}
+		else{
+			updateRequests(peer);
+		}
 	};
 
 	function writeBlock(buffer, fileIndex, byteIndex){
@@ -760,26 +765,24 @@ function main(arg){
 						}
 						for(var i = requestTracker[temp]; (i < blocksInPiece) && ((i - requestTracker[temp]) < (numNewRequests - newRequests.length)); i++){
 							newRequests.push({piece: temp, block: i});
-							requestTracker[temp]++;
 						}
 					}
 				}
 				for(var i = 0; i < newRequests.length; i++){
 					peer.sendRequest(newRequests[i]);
-					requestedBlocks++;
+					requestTracker[newRequests[i].piece] ++;
+					requestedBlocks ++;
 				}
 			}
 		}
 		else if(!peer.interested){
 			var temp;
-			var temp2;
 			var mask;
 			for(var i = 0; i < peer.availPieces.length && !peer.interested; i++){
 				temp = peer.availPieces.readUInt8(i);
-				temp2 = piecePossession.readUInt8(i);
 				mask = 0x80;
 				for(var j = 0; j < 8 && !peer.interested; j++){
-					peer.interested = (temp2 & mask) === 0 && (temp & mask) === 1;
+					peer.interested = blocksDownloaded[i * 8 + j] !== blocksInPiece && (temp & mask) === 1;
 					mask = mask >> 1;
 				}
 			}
@@ -845,9 +848,38 @@ function main(arg){
 	};
 
 	function checkHash(piece, buffer){
-		var hash = SHA1(buffer.toString("binary"));
-		console.log(hash);
-		console.log(torrentFile.info.pieces.substring(piece*20, (piece + 1) * 20));
+		var hash = parseHex(SHA1(buffer.toString("binary")));
+		var completion;
+		if(torrentFile.info.pieces.substring(piece * 20, (piece + 1) * 20) === hash){
+			debug("SHA1 hash check for piece " + piece + " complete");
+			completedPieces++;
+			completion = Math.floor(completedPieces * 100 / totalPieces);
+			debug("*****     COMPLETION: " + completion + "%     *****");
+			if(completedPieces > DEFAULT.RARESTFIRST_THRESH){
+				events.emit("rf");
+			}
+			if(completedPieces === totalPieces){
+				events.emit("completed");
+			}
+		}
+		else{	
+			debug("SHA1 hash check for piece " + piece + " failed");
+			blocksDownloaded[piece] = 0;
+			requestTracker[piece] = 0;
+			requestedBlocks -= blocksInPiece;
+			if(torrentState === "endgame"){
+				debug("*****     Re-entering rarest first stage     *****");
+				torrentState = "rf";
+				for(var i = 0; i < connpeers.length; i++){
+					connpeers.availPieces = [];
+				}
+				for(var i = 0; i < lostRequests.length; i++){
+					if(lostRequests[i].piece === piece){
+						lostRequests.splice(i, 1);
+					}
+				}
+			}
+		}
 	};
 };
 
