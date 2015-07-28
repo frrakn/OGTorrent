@@ -12,6 +12,13 @@ Work-in-progress-but-functional BitTorrent client written in Node.js
 | Random -> Rarity First -> Endgame peer requesting | Mutliple .torrent files		 |												 |
 | SHA1 hash checks on completed pieces							|														 |												 |
 
+#### Dependencies
+------
+Node - 0.12.x
+  
+Bluebird - 2.9.x
+Underscore - 1.8.x
+
 #### Install
 ------
 Install via npm:
