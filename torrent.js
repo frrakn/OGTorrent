@@ -483,7 +483,6 @@ function main(arg){
 		});
 	};
 
-
 	function UDPSendAnnounce(socket, msg, tracker, num, timeout){
 		var output;
 		if(num > DEFAULT.TRIES){
@@ -749,6 +748,7 @@ function main(arg){
 		var newRequests = [];
 		var temp;
 		var temp2;
+		var maxRarity = DEFAULT.MAX_PEERS;
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: Status - Choked: " + peer.choked + " Sent Interest: " + peer.interested + " :: Updating Requests...");
 		if(!peer.choked){
 			if(torrentState === "endgame"){
@@ -766,24 +766,54 @@ function main(arg){
 				//while(newRequests.length < numNewRequests && peer.requests.length > 0){
 					//  TODO - completing pieces
 				//}
-				while(finishedRequests < numNewRequests){
+				if(finishedRequests < numNewRequests){
 					if(torrentState === "rf"){
-						//  TODO - rarity based requesting
-					}
-					else{
-						temp = Math.floor(Math.random() * totalPieces);
-						while(!(peer.availPieces.readUInt8(Math.floor(temp / 8)) & (1 << (7 - temp % 8))) && !(requestTracker[temp] < blocksInPiece)){
-							temp++;
-							if(temp === totalPieces){
-								temp = 0;
+						for(var i = 0; i < totalPieces && maxRarity !== 1; i++){
+							if(peer.hasPiece(i) && requestTracker[i] < blocksInPiece && rarity[i] < maxRarity){
+								if(newRequests.length < numNewRequests){
+									temp = Math.min(numNewRequests - newRequests.length, blocksInPiece - requestTracker[i]);
+									for(var j = 0; j < temp; j++){
+										newRequests.push([{piece: i, block: requestTracker[i] + j}, rarity[i]]);
+									}
+								}
+								else{
+									temp = blocksInPiece - requestTracker[i];
+									temp2 = 0;
+									for(var j = 0; j < temp && temp2 < newRequests.length; j++){
+										while(newRequests[temp2][1] > rarity[i] && temp2 < newRequests.length){
+											temp2 ++;
+										}
+										newRequests[temp2] = [{piece: i, block: requestTracker[i] + j}, rarity[i]];
+									}
+								}
+							}
+							if(newRequests.length === numNewRequests){
+								maxRarity = Math.max.apply(null, newRequests.map(function(e, index, arr){return e[1];}));
 							}
 						}
-						temp2 = requestTracker[temp];
-						for(var i = requestTracker[temp]; (i < blocksInPiece) && ((i - temp2) < (numNewRequests - finishedRequests)); i++){
-							sendRequest(peer, {piece: temp, block: i});
-							requestTracker[temp] ++;
+						for(var i = 0; i < newRequests.length; i++){
+							sendRequest(peer, newRequests[i][0]);
+							requestTracker[newRequests[i][0].piece] ++;
 							requestedBlocks ++;
 							finishedRequests ++;
+						}
+					}
+					else{
+						while(finishedRequests < numNewRequests){
+  						temp = Math.floor(Math.random() * totalPieces);
+  						while(!(peer.hasPiece(temp)) && !(requestTracker[temp] < blocksInPiece)){
+  							temp++;
+  							if(temp === totalPieces){
+  								temp = 0;
+  							}
+  						}
+  						temp2 = requestTracker[temp];
+  						for(var i = requestTracker[temp]; (i < blocksInPiece) && ((i - temp2) < (numNewRequests - finishedRequests)); i++){
+  							sendRequest(peer, {piece: temp, block: i});
+  							requestTracker[temp] ++;
+  							requestedBlocks ++;
+  							finishedRequests ++;
+  						}
 						}
 					}
 				}
@@ -873,7 +903,7 @@ function main(arg){
 			completion = Math.floor(completedPieces * 100 / totalPieces);
 			debug("*****     COMPLETION: " + completion + "%     *****");
 			if(completedPieces > DEFAULT.RARESTFIRST_THRESH){
-				//events.emit("rf");
+				events.emit("rf");
 			}
 			if(completedPieces === totalPieces){
 				events.emit("completed");

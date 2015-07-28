@@ -83,6 +83,9 @@ function Peer(ip, port, fileLength, info_hash){
 		}
 		return removed;
 	}
+	this.hasPiece = function(piece){
+		return !!(this.availPieces.readUInt8(Math.floor(piece / 8)) & (1 << (7 - piece % 8)));
+	};
 };
 
 Peer.prototype = Object.create(Event.EventEmitter.prototype);
