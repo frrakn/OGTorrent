@@ -1,0 +1,24 @@
+{
+  "name": "ogtorrent",
+  "version": "0.1.0",
+  "description": "Mostly-functional (work-in-progress) bitTorrent client",
+  "main": "torrent.js",
+  "scripts": {
+		"run": "node torrent"
+	},
+	"dependencies": {
+		"underscore": "1.8.x",
+		"bluebird": "2.9.x" 
+	},
+	"engine": "node 0.12.x",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/frrakn/OGTorrent.git"
+  },
+  "author": "Frank Chen",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/frrakn/OGTorrent/issues"
+  },
+  "homepage": "https://github.com/frrakn/OGTorrent#readme"
+}
