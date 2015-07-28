@@ -16,7 +16,7 @@ Work-in-progress-but-functional BitTorrent client written in Node.js
 ------
 Node - 0.12.x
   
-Bluebird - 2.9.x
+Bluebird - 2.9.x  
 Underscore - 1.8.x
 
 #### Install
