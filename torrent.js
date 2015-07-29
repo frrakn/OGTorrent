@@ -578,11 +578,33 @@ function main(arg){
 		var peerNum = connpeers.indexOf(peer);
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: DISCONNECTED :: " + reason);
 		if(peerNum !== -1){
-			connpeers.splice(connpeers.indexOf(peer), 1);
+			connpeers.splice(peerNum, 1);
+			lostRequests = lostRequests.concat(peer.requests);
+			updateRarity(peer.availPieces, false);
 			peer.socket.end();
 			checkPeers();
 		}
-	};	
+	};
+
+	function updateRarity(availPiecesBuffer, isAdd){
+		var temp;
+		var mask;
+		for(var i = 0; i < availPiecesBuffer.length; i++){
+			temp = availPiecesBuffer.readUInt8(i);
+			mask = 0x80;
+			for(var j = 0; j < 8; j++){
+				if(temp & mask){
+					if(isAdd){
+						rarity[(i * 8) + j] ++;
+					}
+					else{
+						rarity[(i * 8) + j] --;
+					}
+				}
+				mask = mask >> 1;
+			}
+		}
+	}
 
 	function sendHandshake(peer){
 		var output;
@@ -698,20 +720,9 @@ function main(arg){
 			}
 		});
 		peer.once("message", function(msg){
-			var temp;
-			var mask;
 			if(msg.type === messageParse.types["bitfield"]){
 				peer.availPieces = msg.bitfield;
-				for(var i = 0; i < peer.availPieces.length; i++){
-					temp = peer.availPieces.readUInt8(i);
-					mask = 0x80;
-					for(var j = 0; j < 8; j++){
-						if(temp & mask){
-							rarity[(i * 8) + j]++;
-						}
-						mask = mask >> 1;
-					}
-				}
+				updateRarity(peer.availPieces, true);
 			}
 		});
 	};
@@ -796,7 +807,10 @@ function main(arg){
 				numNewRequests = Math.min(DEFAULT.MAX_PEER_REQUESTS - peer.requests.length, totalBlocks - requestedBlocks);
 				if(lostRequests.length > 0){
 					for(var i = 0; i < lostRequests.length && finishedRequests < numNewRequests; i++){
-						//  TODO - any removed peers
+						if(peer.hasPiece(lostRequests[i].piece)){
+							sendRequest(peer, lostRequests[i]);
+							finishedRequests ++;
+						}
 					}
 				}
 				if(finishedRequests < numNewRequests && peer.requests.length > 0){
