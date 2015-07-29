@@ -1,6 +1,6 @@
 var DEFAULT = {
 	torrentPrefix: "OG",
-	version: "0100",
+	version: "0102",
 	PORT: 6881,
 	PATH: "./downloads/",
 	MAX_PEERS: 50,

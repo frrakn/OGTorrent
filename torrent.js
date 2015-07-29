@@ -217,7 +217,7 @@ function main(arg){
 	function endgameListener(){
 		debug("*****     Entering Endgame requesting stage...     *****");
 		endgameRequests = lostRequests;
-		endgameRequests = endgameRequests.concat.apply(endgameRequests, connpeers.map(function(peer){return peer.availPieces}));
+		endgameRequests = endgameRequests.concat.apply(endgameRequests, connpeers.map(function(peer){return peer.requests}));
 		torrentState = "endgame";
 	}
 
@@ -566,11 +566,14 @@ function main(arg){
 	};
 
 	function closePeer(peer, reason){
+		var peerNum = connpeers.indexOf(peer);
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: DISCONNECTED :: " + reason);
-		connpeers.splice(connpeers.indexOf(peer), 1);
-		peer.socket.end();
-		checkPeers();
-	};
+		if(peerNum !== -1){
+			connpeers.splice(connpeers.indexOf(peer), 1);
+			peer.socket.end();
+			checkPeers();
+		}
+	};	
 
 	function sendHandshake(peer){
 		var output;
@@ -648,6 +651,7 @@ function main(arg){
 					var bytesToWrite;
 					var leftoverBuf = msg.block;
 					var fileIndex = 0;
+					peer.refreshPieceTimeout();
 					if(peer.hasRequested(msg.index, msg.begin / DEFAULT.CHUNK_BYTES)){
 						byteIndex = msg.index * pieceLength + msg.begin;
 						while(byteIndex > downloads[fileIndex][1]){
@@ -658,6 +662,18 @@ function main(arg){
 							writeComplete(peer, msg.index, msg.begin / DEFAULT.CHUNK_BYTES);
 						});
  					}
+					if(torrentState === "endgame"){
+						for(var i = 0; i < connpeers.length; i++){
+							if(connpeers[i] !== peer){
+								sendCancel(connpeers[i], {piece: msg.index, block: msg.begin / DEFAULT.CHUNK_BYTES});
+							}
+						}
+						for(var i = 0; i < endgameRequests.length; i++){
+							if(endgameRequests[i].piece === msg.index && endgameRequests[i].block === (msg.begin / DEFAULT.CHUNK_BYTES)){
+								endgameRequests.splice(i, 1);
+							}
+						}
+					}
 					break;
 				case messageParse.types["cancel"]:
 					debug("Peer: " + peer.ip + ":" + peer.port + " :: Message received - CANCEL");
@@ -742,6 +758,15 @@ function main(arg){
 		}
 	}
 
+	function sendCancel(peer, request){
+		if(request.piece === totalPieces - 1 && request.block === blocksInPiece - 1){
+			peer.cancel(request, Math.min(totalBytes - (request.piece * pieceLength + request.block * DEFAULT.CHUNK_BYTES), DEFAULT.CHUNK_BYTES));
+		}
+		else{
+			peer.cancel(request);
+		}
+	}
+
 	function updateRequests(peer){
 		var numNewRequests;
 		var finishedRequests = 0;
@@ -753,7 +778,9 @@ function main(arg){
 		if(!peer.choked){
 			if(torrentState === "endgame"){
 				for(var i = 0; i < endgameRequests.length; i++){
-					sendRequest(peer, endgameRequests[i]);
+					if(!peer.hasRequested(endgameRequests[i].piece, endgameRequests[i].block) && peer.hasPiece(endgameRequests[i].piece)){
+						sendRequest(peer, endgameRequests[i]);
+					}
 				}
 			}
 			else{
@@ -763,9 +790,16 @@ function main(arg){
 						//  TODO - any removed peers
 					}
 				}
-				//while(newRequests.length < numNewRequests && peer.requests.length > 0){
-					//  TODO - completing pieces
-				//}
+				if(finishedRequests < numNewRequests && peer.requests.length > 0){
+					  for(var i = 0; i < peer.requests.length && finishedRequests < numNewRequests; i++){
+							while(requestTracker[peer.requests[i].piece] < blocksInPiece && finishedRequests < numNewRequests){
+								sendRequest(peer, {piece: peer.requests[i].piece, block: requestTracker[peer.requests[i].piece]});
+								requestTracker[peer.requests[i].piece] ++;
+								requestedBlocks ++;
+								finishedRequests ++;
+							}
+						}
+				}
 				if(finishedRequests < numNewRequests){
 					if(torrentState === "rf"){
 						for(var i = 0; i < totalPieces && maxRarity !== 1; i++){
@@ -818,7 +852,7 @@ function main(arg){
 					}
 				}
 				if(requestedBlocks === totalBlocks){
-					//events.emit("endgame");
+					events.emit("endgame");
 				}
 			}
 		}

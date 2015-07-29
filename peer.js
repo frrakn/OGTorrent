@@ -41,9 +41,7 @@ function Peer(ip, port, fileLength, info_hash){
 		debug("Peer: " + this.ip + ":" + this.port + " :: Connecting...");
 		this.socket.connect(this.port, this.ip, function(){
 			self.emit("init");
-			self.pieceTimeout = setTimeout(function(){
-				self.emit("pieceTimeout");
-			}, DEFAULT.PIECE_TIMEOUT);
+			self.pieceTimeout = setTimeout(self.pieceTimeoutHander, DEFAULT.PIECE_TIMEOUT);
 		});
 		this.socket.on("timeout", function(){
 			self.emit("timeout");
@@ -56,10 +54,26 @@ function Peer(ip, port, fileLength, info_hash){
 		});
 		this.socket.setTimeout(DEFAULT.PEER_TIMEOUT);
 	};
+
+	this.pieceTimeoutHandler = function(){
+		self.emit("pieceTimeout");
+	};
+
+	this.refreshPieceTimeout = function(){
+		clearTimeout(this.pieceTimeout);
+		this.pieceTimeout = setTimeout(this.pieceTimeoutHandler, DEFAULT.PIECE_TIMEOUT);
+	};
 	
 	this.send = function(msg){
 		debug("Peer: " + this.ip + ":" + this.port + " :: Sending message " + messageParse.types[msg.type]);
 		this.socket.write(messageParse.pkg(msg));
+	}
+	this.cancel = function(request, length){
+		length = length || DEFAULT.CHUNK_BYTES;
+		if(this.hasRequested(request.piece, request.block)){
+				this.send({type: messageParse.types["cancel"], index: request.piece, begin: request.block * DEFAULT.CHUNK_BYTES, length: length});
+				this.requests.splice(i, 1);
+		}
 	}
 	this.sendRequest = function(request, length){
 		length = length || DEFAULT.CHUNK_BYTES;
