@@ -533,35 +533,44 @@ function main(arg){
 
 	function connectPeer(){
 		var output;
+		var exists = false;
 		var peer = peers.pop();
-		connpeers.push(peer);
-		output = new Promise(function(resolve, reject){
-			peer.init();
-			peer.on("init", function(){
-				resolve(peer);
-			});
-			peer.on("timeout", reject);
-			peer.on("close", reject);
-			peer.on("error", reject);
-			peer.on("timeout", function(){
-				closePeer(peer, "Timed out");
-			});
-			peer.on("error", function(err){
-				closePeer(peer, err);
-			});
-			peer.on("close", function(){
-				closePeer(peer, "Connection was closed");
-			});
-			peer.on("pieceTimeout", function(){
-				closePeer(peer, "No pieces received - Timed out");
-			});
-		})
-		.then(function(currentPeer){
-			checkPeers();
-			sendHandshake(currentPeer);
-		}, checkPeers);   //  NOTE: might want to delete? replicated checkPeers on failure, since listeners will reject
-											//  and rejection will checkPeers and actual close socket function will also checkPeers 
-											//  TODO: tidy up checkPeers calls
+		for(var i = 0; !exists && i < connpeers.length; i++){
+			exists = connpeers[i].ip === peer.ip && connpeers[i].port === peer.port;
+		}
+		if(!exists){
+			connpeers.push(peer);
+			output = new Promise(function(resolve, reject){
+				peer.init();
+				peer.on("init", function(){
+					resolve(peer);
+				});
+				peer.on("timeout", reject);
+				peer.on("close", reject);
+				peer.on("error", reject);
+				peer.on("timeout", function(){
+					closePeer(peer, "Timed out");
+				});
+				peer.on("error", function(err){
+					closePeer(peer, err);
+				});
+				peer.on("close", function(){
+					closePeer(peer, "Connection was closed");
+				});
+				peer.on("pieceTimeout", function(){
+					closePeer(peer, "No pieces received - Timed out");
+				});
+			})
+			.then(function(currentPeer){
+				checkPeers();
+				sendHandshake(currentPeer);
+			}, checkPeers);   //  NOTE: might want to delete? replicated checkPeers on failure, since listeners will reject
+												//  and rejection will checkPeers and actual close socket function will also checkPeers 
+												//  TODO: tidy up checkPeers calls
+		}
+		else{
+			return Promise.resolve().then(checkPeers);
+		}
 		return output;
 	};
 
@@ -814,7 +823,7 @@ function main(arg){
 									temp = blocksInPiece - requestTracker[i];
 									temp2 = 0;
 									for(var j = 0; j < temp && temp2 < newRequests.length; j++){
-										while(newRequests[temp2][1] > rarity[i] && temp2 < newRequests.length){
+										while(temp2 < newRequests.length && newRequests[temp2][1] > rarity[i]){
 											temp2 ++;
 										}
 										newRequests[temp2] = [{piece: i, block: requestTracker[i] + j}, rarity[i]];

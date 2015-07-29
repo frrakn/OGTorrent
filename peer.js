@@ -70,10 +70,20 @@ function Peer(ip, port, fileLength, info_hash){
 	}
 	this.cancel = function(request, length){
 		length = length || DEFAULT.CHUNK_BYTES;
-		if(this.hasRequested(request.piece, request.block)){
+		var index = this.findRequest(request.piece, request.block);
+		if(index !== -1){
 				this.send({type: messageParse.types["cancel"], index: request.piece, begin: request.block * DEFAULT.CHUNK_BYTES, length: length});
-				this.requests.splice(i, 1);
+				this.requests.splice(index, 1);
 		}
+	}
+	this.findRequest = function(piece, block){
+		var requested = -1;
+		for(var i = 0; i < this.requests.length && requested === -1; i++){
+			if(this.requests[i].piece === piece && this.requests[i].block === block){
+				requested = i;
+			}
+		}
+		return requested;
 	}
 	this.sendRequest = function(request, length){
 		length = length || DEFAULT.CHUNK_BYTES;
