@@ -20,6 +20,7 @@ var url = require("url");
 var dgram = require("dgram");
 var args = process.argv;
 
+var crypto = require("crypto");
 
 function querify(obj){
 	var output = "";
@@ -251,28 +252,36 @@ function main(arg){
 		var output;
 		var tracker;
 
-		params.info_hash = info_hash;
-		params.peerid = peerid;
-		params.port =	DEFAULT.PORT;
-		params.numwant = DEFAULT.MAX_PEERS;
-		params.event = "started";
-
-		//  TODO - Will have to edit this when the filecheck is implemented
-		params.left = totalBytes;
-		params.downloaded = totalBytes - params.left;
-		params.uploaded = totalBytes - params.left;
-	
-		tracker = url.parse(trackers.shift());
-		output = Promise.resolve([params, tracker]);
-		if(tracker.protocol === "http:" || tracker.protocol === "https:"){
-			output.then(httpTracker);
-		}
-		else if(tracker.protocol === "udp:"){
-			output.then(udpTracker);
+		if(trackers.length === 0){
+			//  checkPeers may get called multiple times asynchronously, so cannot guarantee that trackers
+			//	array will necessarily be non-empty
+			output = Promise.resolve();
 		}
 		else{
-			debug("Tracker protocol \"" + tracker.protocol + "\" not recognized. Skipping to next tracker.");
-			output.then(populatePeers);
+			params.info_hash = info_hash;
+			params.peerid = peerid;
+			params.peer_id = peerid;
+			params.port =	DEFAULT.PORT;
+			params.numwant = DEFAULT.MAX_PEERS;
+			params.event = "started";
+
+			//  TODO - Will have to edit this when the filecheck is implemented
+			params.left = totalBytes;
+			params.downloaded = totalBytes - params.left;
+			params.uploaded = totalBytes - params.left;
+		
+			tracker = url.parse(trackers.shift());
+			output = Promise.resolve([params, tracker]);
+			if(tracker.protocol === "http:" || tracker.protocol === "https:"){
+				output.then(httpTracker);
+			}
+			else if(tracker.protocol === "udp:"){
+				output.then(udpTracker);
+			}
+			else{
+				debug("Tracker protocol \"" + tracker.protocol + "\" not recognized. Skipping to next tracker.");
+				output.then(populatePeers);
+			}
 		}
 		return output;
 	};
@@ -467,7 +476,6 @@ function main(arg){
 			if(result){
 				debug("Tracker " + tracker.href + " :: Received \"announce\" response");
 				clearTimeout(timeout[0]);
-				socket.close();
 				send.cancel();
 				for(var i = 0; i < result.peers.length; i++){
 					peers.push(new Peer(result.peers[i].ip, result.peers[i].port, totalPieces, parseHex(params.info_hash)));
@@ -504,6 +512,7 @@ function main(arg){
 						events.on("stopped", function(){
 							msg.event = "stopped";
 							socket.send(messageParseUDP.pkg(msg), 0, 98, tracker.port, tracker.hostname);
+							socket.close();
 						});
 					}
 					num++;
@@ -578,6 +587,8 @@ function main(arg){
 		var peerNum = connpeers.indexOf(peer);
 		debug("Peer: " + peer.ip + ":" + peer.port + " :: DISCONNECTED :: " + reason);
 		if(peerNum !== -1){
+			peer.socket.setTimeout(0);
+			clearTimeout(peer.pieceTimeout);
 			connpeers.splice(peerNum, 1);
 			lostRequests = lostRequests.concat(peer.requests);
 			updateRarity(peer.availPieces, false);

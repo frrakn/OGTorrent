@@ -1,6 +1,6 @@
 {
   "name": "ogtorrent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Mostly-functional (work-in-progress) bitTorrent client",
   "main": "torrent.js",
   "scripts": {
