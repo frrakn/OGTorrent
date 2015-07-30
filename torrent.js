@@ -126,6 +126,7 @@ function prepFile(filepath, filesize){
 };
 
 function main(arg){
+	var torrentName;
 	var torrentFile;
 	var torrentState = "opening"; // opening - random piece selection until DEFAULT.RARESTFIRST_THRESH pieces completed
 	var downloads = [];           // rf - random rarest first selection
@@ -163,6 +164,7 @@ function main(arg){
 
 	var stageInit = stageReadTorrent.then(function(data){
 		debug("*****     Parsing torrent file...     *****");
+		torrentName = arg.substring(0, arg.indexOf("."));
 		torrentFile = bencoder.bdecode(parseHex(data))[0];
 		totalPieces = torrentFile.info.pieces.length / 20;
 		pieceLength = torrentFile.info["piece length"];
@@ -189,9 +191,9 @@ function main(arg){
 		}
 		else{
 			for(var i = 0; i < torrentFile.info.files.length; i++){
-				downloads.push([openDirectories(torrentFile.info.files[i].path).then((function(j){
+				downloads.push([openDirectories([torrentName].concat(torrentFile.info.files[i].path)).then((function(j){
 					return function(){
-						return prepFile(torrentFile.info.files[j].path, torrentFile.info.files[j].length);
+						return prepFile([torrentName].concat(torrentFile.info.files[j].path), torrentFile.info.files[j].length);
 					}
 				})(i)), torrentFile.info.files[i].length]);
 			}
@@ -643,7 +645,7 @@ function main(arg){
 				attachListeners(peer);
 			}
 			else{
-				debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake failed :: info_hash " + msg.info_hash.toString("binary") + " :: " + peer.info_hash.toString());
+				debug("Peer: " + peer.ip + ":" + peer.port + " :: Handshake failed :: info_hash " + (msg.info_hash ? msg.info_hash.toString("binary") : "undefined")  + " :: " + peer.info_hash.toString());
 				peer.emit("error");
 			}
 		});
